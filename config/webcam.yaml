@@ -1,0 +1,41 @@
+%YAML:1.0
+
+# Camera calibration (you need to calibrate your webcam!)
+Camera.fx: 500.0
+Camera.fy: 500.0
+Camera.cx: 320.0
+Camera.cy: 240.0
+
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+
+# Color order (0: BGR, 1: RGB)
+Camera.RGB: 0
+
+# ORB Parameters
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500
+
+# Map Saving/Loading
+# System.LoadAtlasFromFile: "maps/indoor_map.osa"
+System.SaveAtlasToFile: "maps/indoor_map.osa"
