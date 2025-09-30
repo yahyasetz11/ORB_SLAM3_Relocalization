@@ -2,6 +2,9 @@
 """
 Camera Calibration Script for ORB_SLAM3
 Generates camera parameters from checkerboard calibration video
+
+Run :
+python3 calibrate_camera.py path/to/your/calibration_video.mp4
 """
 
 import cv2
