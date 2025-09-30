@@ -47,8 +47,16 @@ add_executable(slam_realsense src/main_realsense.cpp)
 add_executable(slam_webcam src/main_webcam.cpp)
 add_executable(slam_webcam_simple src/main_webcam_simple.cpp)
 add_executable(slam_realsense_simple src/main_realsense_simple.cpp)
+add_executable(main_mp4_mono src/main_mp4_mono.cpp)
 
 target_link_libraries(slam_realsense ${LIBS})
 target_link_libraries(slam_webcam ${LIBS})
 target_link_libraries(slam_webcam_simple ${LIBS})
 target_link_libraries(slam_realsense_simple ${LIBS})
+target_link_libraries(main_mp4_mono
+    ${PROJECT_NAME}
+    ${LIBS}
+    ${CMAKE_THREAD_LIBS_INIT}
+)
+
+
