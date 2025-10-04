@@ -1,177 +1,103 @@
-/**
- * File: main_mp4_mono.cpp
- * Description: ORB_SLAM3 implementation for reading MP4 video files
- * Based on main_webcam_simple but reads from video file instead of live camera
- */
-
 #include <iostream>
 #include <chrono>
+#include <signal.h>
 #include <opencv2/opencv.hpp>
-#include <System.h>
-#include <Converter.h>
+#include "System.h"
 
 using namespace std;
+int frame_count = 0;
+volatile sig_atomic_t shutdown_flag = 0;
+
+ORB_SLAM3::System *SLAM = nullptr;
+
+void signalHandler(int signal)
+{
+    if (signal == SIGINT)
+    {
+        std::cout << "\nCtrl+C detected! Starting cleanup..." << std::endl;
+        std::cout << "Saving map..." << std::endl;
+        SLAM->Shutdown();
+        std::cout << "Shutting down threads..." << std::endl;
+        shutdown_flag = 1;
+        std::cout << "Cleanup completed. Exiting..." << std::endl;
+        exit(0);
+    }
+}
 
 int main(int argc, char **argv)
 {
-    if(argc != 4)
+    signal(SIGINT, signalHandler);
+
+    if (argc != 4) // Changed from 3 to 4
     {
-        cerr << endl << "Usage: ./main_mp4_mono path_to_vocabulary path_to_settings path_to_video.mp4" << endl;
+        cerr << "Usage: ./slam_webcam vocabulary settings video_file.mp4" << endl;
         return 1;
     }
 
-    string vocabularyPath = argv[1];
-    string settingsPath = argv[2];
-    string videoPath = argv[3];
-
-    // Open video file
-    cv::VideoCapture cap(videoPath);
-    if(!cap.isOpened())
+    // Open video file instead of webcam
+    cv::VideoCapture cap(argv[3]);
+    if (!cap.isOpened())
     {
-        cerr << "Error: Cannot open video file: " << videoPath << endl;
-        return -1;
+        cerr << "Cannot open video file: " << argv[3] << endl;
+        return 1;
     }
 
     // Get video properties
     double fps = cap.get(cv::CAP_PROP_FPS);
-    int totalFrames = cap.get(cv::CAP_PROP_FRAME_COUNT);
-    int frameWidth = cap.get(cv::CAP_PROP_FRAME_WIDTH);
-    int frameHeight = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+    int total_frames = cap.get(cv::CAP_PROP_FRAME_COUNT);
+    cout << "Video FPS: " << fps << endl;
+    cout << "Total frames: " << total_frames << endl;
 
-    cout << "Video Properties:" << endl;
-    cout << "  - Path: " << videoPath << endl;
-    cout << "  - FPS: " << fps << endl;
-    cout << "  - Total Frames: " << totalFrames << endl;
-    cout << "  - Resolution: " << frameWidth << "x" << frameHeight << endl;
-
-    // Calculate frame period in seconds
-    double framePeriod = 1.0 / fps;
-
-    // Create SLAM system. It initializes all system threads and gets ready to process frames.
-    ORB_SLAM3::System SLAM(vocabularyPath, settingsPath, ORB_SLAM3::System::MONOCULAR, true);
-
-    cout << endl << "-------" << endl;
-    cout << "Start processing video sequence ..." << endl;
-    cout << "Press ESC to stop" << endl;
+    // Create SLAM system
+    SLAM = new ORB_SLAM3::System(argv[1], argv[2], ORB_SLAM3::System::MONOCULAR, true);
+    cout << "SLAM initialized. Press ESC to exit." << endl;
 
     cv::Mat frame;
-    int frameNumber = 0;
-    
-    // Vector to store trajectory for later saving
-    vector<ORB_SLAM3::KeyFrame*> vpKFs;
-    
-    // Main loop
-    auto start_time = chrono::steady_clock::now();
-    
-    while(cap.read(frame))
+    double timestamp = 0.0;
+
+    while (true)
     {
-        if(frame.empty())
+        cap >> frame;
+        if (frame.empty())
         {
-            cerr << "Warning: Empty frame at frame number " << frameNumber << endl;
-            continue;
-        }
-
-        // Calculate timestamp based on frame number and FPS
-        double timestamp = frameNumber * framePeriod;
-        
-        // Convert to grayscale if needed
-        cv::Mat grayFrame;
-        if(frame.channels() == 3)
-        {
-            cv::cvtColor(frame, grayFrame, cv::COLOR_BGR2GRAY);
-        }
-        else
-        {
-            grayFrame = frame;
-        }
-
-        // Pass the image to the SLAM system
-        auto start_process = chrono::steady_clock::now();
-        cv::Mat Tcw = SLAM.TrackMonocular(grayFrame, timestamp);
-        auto end_process = chrono::steady_clock::now();
-        
-        double process_time = chrono::duration_cast<chrono::duration<double>>(end_process - start_process).count();
-
-        // Display frame info
-        cout << "\rFrame: " << frameNumber << "/" << totalFrames 
-             << " (" << fixed << setprecision(1) << (100.0 * frameNumber / totalFrames) << "%)"
-             << " | Process time: " << fixed << setprecision(3) << process_time << "s"
-             << " | Timestamp: " << fixed << setprecision(3) << timestamp << "s" << flush;
-
-        // Optional: Display the frame with tracked features
-        cv::Mat frameToShow;
-        frame.copyTo(frameToShow);
-        
-        // Get current tracked map points for visualization (optional)
-        vector<cv::KeyPoint> vKeys = SLAM.GetTrackedKeyPointsUn();
-        vector<ORB_SLAM3::MapPoint*> vMPs = SLAM.GetTrackedMapPoints();
-        
-        // Draw tracked keypoints
-        for(size_t i = 0; i < vKeys.size(); i++)
-        {
-            if(vMPs[i])
-            {
-                cv::circle(frameToShow, vKeys[i].pt, 2, cv::Scalar(0, 255, 0), -1);
-            }
-        }
-        
-        // Add frame info on image
-        cv::putText(frameToShow, "Frame: " + to_string(frameNumber) + "/" + to_string(totalFrames), 
-                    cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
-        cv::putText(frameToShow, "FPS: " + to_string(int(fps)), 
-                    cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
-        
-        cv::imshow("ORB-SLAM3: MP4 Input", frameToShow);
-        
-        // Check for ESC key
-        char key = cv::waitKey(1);
-        if(key == 27) // ESC key
-        {
-            cout << endl << "Processing stopped by user" << endl;
+            cout << "End of video reached." << endl;
             break;
         }
-        
-        frameNumber++;
-        
-        // Optional: Add delay to match real-time playback
-        // This is useful if you want to see the video at normal speed
-        // Comment out for faster processing
-        /*
-        auto current_time = chrono::steady_clock::now();
-        auto elapsed = chrono::duration_cast<chrono::duration<double>>(current_time - start_time).count();
-        double expected_time = frameNumber * framePeriod;
-        if(expected_time > elapsed)
-        {
-            int wait_ms = (expected_time - elapsed) * 1000;
-            cv::waitKey(wait_ms);
-        }
-        */
+
+        cv::Mat resized_frame;
+        cv::resize(frame, resized_frame, cv::Size(640, 480));
+
+        // Use frame-based timestamp (more accurate for video files)
+        timestamp = frame_count / fps;
+
+        cout << "Frame " << frame_count++ << " / " << total_frames
+             << " - Timestamp: " << timestamp << "s" << endl;
+
+        Sophus::SE3f pose = SLAM->TrackMonocular(resized_frame, timestamp);
+
+        // Check tracking state
+        int state = SLAM->GetTrackingState();
+        if (state == 0)
+            cout << "SYSTEM_NOT_READY" << endl;
+        else if (state == 1)
+            cout << "NO_IMAGES_YET" << endl;
+        else if (state == 2)
+            cout << "OK" << endl;
+        else if (state == 3)
+            cout << "NOT_INITIALIZED" << endl;
+        else if (state == 4)
+            cout << "LOST" << endl;
+
+        cv::imshow("Video Playback", resized_frame);
+
+        // Wait time based on FPS (or press ESC to exit)
+        int delay = max(1, (int)(1000.0 / fps));
+        if (cv::waitKey(delay) == 27)
+            break;
     }
 
-    cout << endl << endl << "Video processing completed!" << endl;
-    cout << "Total frames processed: " << frameNumber << endl;
-
-    // Stop all threads
-    SLAM.Shutdown();
-
-    // Save camera trajectory
-    string trajectoryFile = "CameraTrajectory_" + to_string(chrono::system_clock::now().time_since_epoch().count()) + ".txt";
-    cout << "Saving camera trajectory to " << trajectoryFile << " ..." << endl;
-    SLAM.SaveTrajectoryTUM(trajectoryFile);
-
-    // Save keyframe trajectory  
-    string keyframeFile = "KeyFrameTrajectory_" + to_string(chrono::system_clock::now().time_since_epoch().count()) + ".txt";
-    cout << "Saving keyframe trajectory to " << keyframeFile << " ..." << endl;
-    SLAM.SaveKeyFrameTrajectoryTUM(keyframeFile);
-
-    // Optional: Save the map
-    cout << "Saving map..." << endl;
-    SLAM.SaveMap("map_from_video.osa");
-    
-    cout << "Map and trajectories saved successfully!" << endl;
-
+    SLAM->Shutdown();
     cap.release();
     cv::destroyAllWindows();
-
     return 0;
 }

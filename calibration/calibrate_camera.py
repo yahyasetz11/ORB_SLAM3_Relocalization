@@ -1,26 +1,22 @@
 #!/usr/bin/env python3
 """
-Camera Calibration Script for ORB_SLAM3
-Generates camera parameters from checkerboard calibration video
-
-Run :
-python3 calibrate_camera.py path/to/your/calibration_video.mp4
+Camera Calibration Script for ORB_SLAM3 - HEADLESS VERSION
+No display window, faster processing
 """
 
 import cv2
 import numpy as np
 import sys
-import yaml
+import time
 
 def calibrate_camera_from_video(video_path, checkerboard_size=(9, 6), square_size=0.025):
     """
-    Calibrate camera from video containing checkerboard patterns
-    
-    Args:
-        video_path: Path to calibration video
-        checkerboard_size: (columns-1, rows-1) of internal corners
-        square_size: Size of checkerboard square in meters
+    Calibrate camera WITHOUT display window
     """
+    
+    print("="*100)
+    print("CALIBRATION HEADLESS MODE - No Display")
+    print("="*100)
     
     # Termination criteria for corner refinement
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -31,24 +27,35 @@ def calibrate_camera_from_video(video_path, checkerboard_size=(9, 6), square_siz
     objp *= square_size
     
     # Arrays to store object points and image points
-    objpoints = []  # 3D points in real world space
-    imgpoints = []  # 2D points in image plane
+    objpoints = []
+    imgpoints = []
     
     # Open video
+    print(f"\n📹 Opening video: {video_path}")
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"Error: Cannot open video {video_path}")
+        print(f"❌ Error: Cannot open video {video_path}")
         return None
     
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    print(f"Video info: {width}x{height} @ {fps} fps")
-    print(f"Looking for {checkerboard_size[0]}x{checkerboard_size[1]} checkerboard pattern...")
+    print(f"📊 Video info:")
+    print(f"   Resolution: {width}x{height}")
+    print(f"   FPS: {fps}")
+    print(f"   Total frames: {total_frames}")
+    print(f"\n🔍 Looking for {checkerboard_size[0]}x{checkerboard_size[1]} checkerboard pattern...")
+    print("   (This may take a minute...)\n")
     
     frame_count = 0
     used_frames = 0
+    start_time = time.time()
+    last_update = time.time()
+    
+    # Process every Nth frame (adjust for speed)
+    skip_frames = 5  # Process every 5th frame (faster)
     
     while True:
         ret, frame = cap.read()
@@ -57,11 +64,24 @@ def calibrate_camera_from_video(video_path, checkerboard_size=(9, 6), square_siz
         
         frame_count += 1
         
+        # Skip frames for faster processing
+        if frame_count % skip_frames != 0:
+            continue
+        
+        # Progress update every 2 seconds
+        if time.time() - last_update > 2:
+            progress = (frame_count / total_frames) * 100
+            print(f"   Processing: {progress:.1f}% - Found {used_frames} calibration frames", end='\r')
+            last_update = time.time()
+        
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
         # Find checkerboard corners
-        ret, corners = cv2.findChessboardCorners(gray, checkerboard_size, None)
+        ret, corners = cv2.findChessboardCorners(
+            gray, checkerboard_size, 
+            cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE
+        )
         
         if ret:
             # Refine corners
@@ -71,39 +91,40 @@ def calibrate_camera_from_video(video_path, checkerboard_size=(9, 6), square_siz
             imgpoints.append(corners2)
             used_frames += 1
             
-            # Draw and display corners
-            cv2.drawChessboardCorners(frame, checkerboard_size, corners2, ret)
-            cv2.putText(frame, f"Frame {used_frames} captured", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        cv2.putText(frame, f"Frames: {used_frames}/{frame_count}", (10, height-20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-        cv2.imshow('Calibration', frame)
-        
-        # Skip frames for faster processing
-        if frame_count % 10 != 0:
-            continue
-            
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+            # Limit number of frames used (for speed)
+            if used_frames >= 100:  # Use max 100 frames
+                print(f"\n✅ Collected enough frames ({used_frames})")
+                break
     
     cap.release()
-    cv2.destroyAllWindows()
+    
+    elapsed = time.time() - start_time
+    print(f"\n⏱️ Frame extraction took: {elapsed:.1f} seconds")
     
     if used_frames < 10:
-        print(f"Error: Not enough frames with checkerboard pattern found ({used_frames}/10 minimum)")
+        print(f"\n❌ Error: Not enough frames with checkerboard pattern found ({used_frames}/10 minimum)")
+        print("\n💡 Tips:")
+        print("   - Check if checkerboard size is correct (currently {0}x{1})".format(*checkerboard_size))
+        print("   - Ensure good lighting in video")
+        print("   - Pattern should be clearly visible")
         return None
     
-    print(f"\nCalibrating with {used_frames} frames...")
+    print(f"\n🔧 Calibrating with {used_frames} frames...")
+    print("   (This may take a moment...)")
     
     # Calibrate camera
-    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, 
-                                                        (width, height), None, None)
+    calib_start = time.time()
+    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(
+        objpoints, imgpoints, 
+        (width, height), None, None
+    )
+    calib_time = time.time() - calib_start
     
     if not ret:
-        print("Calibration failed!")
+        print("❌ Calibration failed!")
         return None
+    
+    print(f"✅ Calibration completed in {calib_time:.1f} seconds")
     
     # Calculate reprojection error
     total_error = 0
@@ -122,50 +143,28 @@ def calibrate_camera_from_video(video_path, checkerboard_size=(9, 6), square_siz
     
     k1, k2, p1, p2, k3 = dist[0]
     
-    print("\n=== Calibration Results ===")
-    print(f"Reprojection error: {avg_error:.4f} pixels")
-    print(f"fx: {fx:.2f}")
-    print(f"fy: {fy:.2f}")
-    print(f"cx: {cx:.2f}")
-    print(f"cy: {cy:.2f}")
-    print(f"k1: {k1:.6f}")
-    print(f"k2: {k2:.6f}")
-    print(f"p1: {p1:.6f}")
-    print(f"p2: {p2:.6f}")
-    print(f"k3: {k3:.6f}")
+    print("\n" + "="*100)
+    print("📊 CALIBRATION RESULTS")
+    print("="*100)
+    print(f"Reprojection error: {avg_error:.4f} pixels", end="")
+    if avg_error < 0.5:
+        print(" ✅ Excellent!")
+    elif avg_error < 1.0:
+        print(" ✅ Good")
+    else:
+        print(" ⚠️ High - consider recalibrating")
     
-    # Create ORB_SLAM3 compatible YAML
-    yaml_content = {
-        '%YAML': 1.0,
-        'Camera.fx': float(fx),
-        'Camera.fy': float(fy),
-        'Camera.cx': float(cx),
-        'Camera.cy': float(cy),
-        'Camera.k1': float(k1),
-        'Camera.k2': float(k2),
-        'Camera.p1': float(p1),
-        'Camera.p2': float(p2),
-        'Camera.k3': float(k3),
-        'Camera.width': int(width),
-        'Camera.height': int(height),
-        'Camera.fps': float(fps),
-        'Camera.RGB': 1,
-        'ORBextractor.nFeatures': 1000,
-        'ORBextractor.scaleFactor': 1.2,
-        'ORBextractor.nLevels': 8,
-        'ORBextractor.iniThFAST': 20,
-        'ORBextractor.minThFAST': 7,
-        'Viewer.KeyFrameSize': 0.05,
-        'Viewer.KeyFrameLineWidth': 1,
-        'Viewer.GraphLineWidth': 0.9,
-        'Viewer.PointSize': 2,
-        'Viewer.CameraSize': 0.08,
-        'Viewer.CameraLineWidth': 3,
-        'Viewer.ViewpointX': 0,
-        'Viewer.ViewpointY': -0.7,
-        'Viewer.ViewpointZ': -1.8,
-        'Viewer.ViewpointF': 500
-    }
+    print(f"\nCamera parameters:")
+    print(f"  fx: {fx:.2f}")
+    print(f"  fy: {fy:.2f}")
+    print(f"  cx: {cx:.2f}")
+    print(f"  cy: {cy:.2f}")
+    print(f"\nDistortion coefficients:")
+    print(f"  k1: {k1:.6f}")
+    print(f"  k2: {k2:.6f}")
+    print(f"  p1: {p1:.6f}")
+    print(f"  p2: {p2:.6f}")
+    print(f"  k3: {k3:.6f}")
     
     # Save to YAML file
     output_file = 'camera_calibration.yaml'
@@ -175,37 +174,60 @@ def calibrate_camera_from_video(video_path, checkerboard_size=(9, 6), square_siz
         f.write('# Camera Parameters (Calibrated)\n')
         f.write('#--------------------------------------------------------------------------------------------\n\n')
         
-        for key, value in yaml_content.items():
-            if key != '%YAML':
-                if isinstance(value, float):
-                    f.write(f'{key}: {value:.6f}\n')
-                else:
-                    f.write(f'{key}: {value}\n')
-                    
-                if key == 'Camera.RGB':
-                    f.write('\n#--------------------------------------------------------------------------------------------\n')
-                    f.write('# ORB Parameters\n')
-                    f.write('#--------------------------------------------------------------------------------------------\n')
-                elif key == 'ORBextractor.minThFAST':
-                    f.write('\n#--------------------------------------------------------------------------------------------\n')
-                    f.write('# Viewer Parameters\n')
-                    f.write('#--------------------------------------------------------------------------------------------\n')
+        f.write(f'Camera.fx: {fx:.6f}\n')
+        f.write(f'Camera.fy: {fy:.6f}\n')
+        f.write(f'Camera.cx: {cx:.6f}\n')
+        f.write(f'Camera.cy: {cy:.6f}\n')
+        f.write(f'\nCamera.k1: {k1:.6f}\n')
+        f.write(f'Camera.k2: {k2:.6f}\n')
+        f.write(f'Camera.p1: {p1:.6f}\n')
+        f.write(f'Camera.p2: {p2:.6f}\n')
+        f.write(f'Camera.k3: {k3:.6f}\n')
+        f.write(f'\nCamera.width: {width}\n')
+        f.write(f'Camera.height: {height}\n')
+        f.write(f'Camera.fps: {fps:.1f}\n')
+        f.write(f'Camera.RGB: 1\n')
+        
+        f.write('\n#--------------------------------------------------------------------------------------------\n')
+        f.write('# ORB Parameters\n')
+        f.write('#--------------------------------------------------------------------------------------------\n')
+        f.write('ORBextractor.nFeatures: 1000\n')
+        f.write('ORBextractor.scaleFactor: 1.2\n')
+        f.write('ORBextractor.nLevels: 8\n')
+        f.write('ORBextractor.iniThFAST: 20\n')
+        f.write('ORBextractor.minThFAST: 7\n')
+        
+        f.write('\n#--------------------------------------------------------------------------------------------\n')
+        f.write('# Viewer Parameters\n')
+        f.write('#--------------------------------------------------------------------------------------------\n')
+        f.write('Viewer.KeyFrameSize: 0.05\n')
+        f.write('Viewer.KeyFrameLineWidth: 1\n')
+        f.write('Viewer.GraphLineWidth: 0.9\n')
+        f.write('Viewer.PointSize: 2\n')
+        f.write('Viewer.CameraSize: 0.08\n')
+        f.write('Viewer.CameraLineWidth: 3\n')
+        f.write('Viewer.ViewpointX: 0\n')
+        f.write('Viewer.ViewpointY: -0.7\n')
+        f.write('Viewer.ViewpointZ: -1.8\n')
+        f.write('Viewer.ViewpointF: 1000\n')
     
-    print(f"\nCalibration saved to: {output_file}")
-    print(f"Use this file as settings for ORB_SLAM3")
+    print(f"\n💾 Calibration saved to: {output_file}")
+    print("✅ Use this file as settings for ORB_SLAM3")
+    
+    total_time = time.time() - start_time
+    print(f"\n⏱️ Total processing time: {total_time:.1f} seconds")
     
     return mtx, dist
 
-
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python calibrate_camera.py <video_path> [checkerboard_cols] [checkerboard_rows]")
-        print("Example: python calibrate_camera.py calibration.mp4 9 6")
+        print("Usage: python calibrate_camera_headless.py <video_path> [checkerboard_cols] [checkerboard_rows]")
+        print("Example: python calibrate_camera_headless.py calibration.mp4 9 6")
         sys.exit(1)
     
     video_path = sys.argv[1]
     
-    # Default checkerboard size (9x6 internal corners = 10x7 squares)
+    # Default checkerboard size
     cols = 9 if len(sys.argv) < 3 else int(sys.argv[2])
     rows = 6 if len(sys.argv) < 4 else int(sys.argv[3])
     

@@ -53,10 +53,6 @@ target_link_libraries(slam_realsense ${LIBS})
 target_link_libraries(slam_webcam ${LIBS})
 target_link_libraries(slam_webcam_simple ${LIBS})
 target_link_libraries(slam_realsense_simple ${LIBS})
-target_link_libraries(main_mp4_mono
-    ${PROJECT_NAME}
-    ${LIBS}
-    ${CMAKE_THREAD_LIBS_INIT}
-)
+target_link_libraries(main_mp4_mono ${LIBS})
 
 
