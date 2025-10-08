@@ -49,7 +49,8 @@ ORBextractor.nLevels: 8
 ORBextractor.iniThFAST: 20
 ORBextractor.minThFAST: 7
 
-System.SaveAtlasToFile: "../../ORB_SLAM3_Relocalization/maps/map"
+System.SaveAtlasToFile: "../../ORB_SLAM3_Relocalization/maps/map1"
+System.LoadAtlasFromFile: "../../ORB_SLAM3_Relocalization/maps/map"
 
 #--------------------------------------------------------------------------------------------
 # Viewer Parameters

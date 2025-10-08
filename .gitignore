@@ -1,0 +1,6 @@
+build/
+log/
+.vscode/
+data/
+maps/
+error.txt
