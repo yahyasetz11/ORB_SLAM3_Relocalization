@@ -242,6 +242,12 @@ namespace Relocalization
             gray = frame.clone();
         }
 
+        if (gray.empty() || !gray.isContinuous())
+        {
+            cerr << "Invalid gray image!" << endl;
+            return;
+        }
+
         std::cout << "[DEBUG] Gray image size=" << gray.cols << "x" << gray.rows << std::endl;
         std::cout << "[DEBUG] mpORBextractor pointer=" << mpORBextractor.get() << std::endl;
 
@@ -255,7 +261,10 @@ namespace Relocalization
 
         // Extract ORB features
         // Note: ORBextractor requires an additional vector<int> parameter
-        std::vector<int> vLappingArea;
+        std::vector<int> vLappingArea = {0, 0};
+
+        cout << "vLappingArea size: " << vLappingArea.size() << endl;
+
         (*mpORBextractor)(gray, cv::Mat(), keypoints, descriptors, vLappingArea);
         std::cout << "[DEBUG] Extraction complete, found " << keypoints.size() << " keypoints" << std::endl;
     }
