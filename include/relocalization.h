@@ -38,12 +38,14 @@ namespace Relocalization
         void processVideo(const std::string &videoPath, bool visualize = true);
         void visualizeLocation(const LocationResult &result);
         void exportMapToPCD(const std::string &outputPath);
+        void debugStatus();
 
     private:
         // Map data
         ORB_SLAM3::System *mpSLAM;
         ORB_SLAM3::Atlas *mpAtlas;
         ORB_SLAM3::ORBVocabulary *mpVocabulary;
+        ORB_SLAM3::KeyFrameDatabase *mpKeyFrameDB;
         std::vector<ORB_SLAM3::KeyFrame *> mvKeyFrames;
         std::vector<ORB_SLAM3::MapPoint *> mvMapPoints;
 

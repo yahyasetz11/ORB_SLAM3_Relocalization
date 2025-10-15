@@ -48,6 +48,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    reloc.debugStatus();
+
     // Process video
     std::cout << "\nStep 2: Processing validation video..." << std::endl;
     reloc.processVideo(videoPath);

@@ -11,13 +11,40 @@ namespace Relocalization
 
     RelocalizationModule::RelocalizationModule(const std::string &vocabPath,
                                                const std::string &configPath)
-        : mVocabPath(vocabPath), mConfigPath(configPath), mpVocabulary(nullptr), mpAtlas(nullptr), mpSLAM(nullptr)
+        : mVocabPath(vocabPath), mConfigPath(configPath), mpVocabulary(nullptr), mpAtlas(nullptr), mpSLAM(nullptr), mpKeyFrameDB(nullptr)
     {
         // Load configuration from YAML
         if (!loadConfig())
         {
             std::cerr << "Failed to load configuration from " << configPath << std::endl;
             return;
+        }
+        // Initialize vocabulary
+        std::cout << "[INFO] Loading vocabulary from: " << mVocabPath << std::endl;
+        mpVocabulary = new ORB_SLAM3::ORBVocabulary();
+
+        bool bVocLoad = false;
+        try
+        {
+            bVocLoad = mpVocabulary->loadFromTextFile(mVocabPath);
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "[ERROR] Exception loading vocabulary: " << e.what() << std::endl;
+        }
+
+        if (!bVocLoad)
+        {
+            std::cerr << "[ERROR] Failed to load vocabulary!" << std::endl;
+            // You might want to throw an exception or handle this error
+        }
+        else
+        {
+            std::cout << "[INFO] Vocabulary loaded successfully" << std::endl;
+
+            // Create KeyFrame Database
+            mpKeyFrameDB = new ORB_SLAM3::KeyFrameDatabase(*mpVocabulary);
+            std::cout << "[INFO] KeyFrame database created" << std::endl;
         }
 
         // Initialize ORB extractor with settings from config
@@ -31,6 +58,20 @@ namespace Relocalization
 
     RelocalizationModule::~RelocalizationModule()
     {
+        // Clean up database BEFORE vocabulary
+        if (mpKeyFrameDB)
+        {
+            delete mpKeyFrameDB;
+            mpKeyFrameDB = nullptr;
+        }
+
+        // Your existing cleanup for vocabulary and other members
+        if (mpVocabulary)
+        {
+            delete mpVocabulary;
+            mpVocabulary = nullptr;
+        }
+
         if (mpSLAM)
         {
             mpSLAM->Shutdown();
@@ -117,6 +158,41 @@ namespace Relocalization
             std::cerr << "Warning: Map is empty!" << std::endl;
             return false;
         }
+
+        // ============ ADD THIS SECTION BEFORE SHUTDOWN ============
+        // CRITICAL: Compute BoW while the system is still active
+        if (!mpVocabulary || !mpKeyFrameDB)
+        {
+            std::cerr << "[ERROR] Vocabulary or Database not initialized!" << std::endl;
+            return false;
+        }
+
+        std::cout << "[INFO] Computing BoW vectors for " << mvKeyFrames.size() << " keyframes..." << std::endl;
+
+        int processedCount = 0;
+        for (auto pKF : mvKeyFrames)
+        {
+            if (pKF && !pKF->isBad())
+            {
+                // Set vocabulary reference for keyframe
+                pKF->SetORBVocabulary(mpVocabulary);
+
+                // Compute BoW vectors - THIS MUST BE DONE BEFORE SHUTDOWN!
+                pKF->ComputeBoW();
+
+                // Add to database for fast searching
+                mpKeyFrameDB->add(pKF);
+
+                processedCount++;
+                if (processedCount % 100 == 0)
+                {
+                    std::cout << "[DEBUG] Processed " << processedCount << " keyframes..." << std::endl;
+                }
+            }
+        }
+
+        std::cout << "[INFO] BoW computed for " << processedCount << " keyframes" << std::endl;
+        // ============ END OF NEW SECTION ============
 
         mMapPointsViz.clear();
         for (auto pMP : mvMapPoints)
@@ -272,55 +348,79 @@ namespace Relocalization
     std::vector<ORB_SLAM3::KeyFrame *> RelocalizationModule::detectRelocalizationCandidates(
         const cv::Mat &descriptors)
     {
+        std::cout << "[DEBUG] Finding candidate keyframes..." << std::endl;
 
-        std::vector<ORB_SLAM3::KeyFrame *> candidates;
+        std::vector<ORB_SLAM3::KeyFrame *> vpCandidates;
 
-        if (mvKeyFrames.empty())
+        if (!mpKeyFrameDB || !mpVocabulary)
         {
-            return candidates;
+            std::cerr << "[ERROR] Database or Vocabulary not initialized!" << std::endl;
+            return vpCandidates;
         }
 
-        // Convert descriptors to DBoW2 format
-        std::vector<cv::Mat> vCurrentDesc;
-        vCurrentDesc.reserve(descriptors.rows);
-        for (int i = 0; i < descriptors.rows; i++)
-        {
-            vCurrentDesc.push_back(descriptors.row(i));
-        }
+        // manual BoW-based matching computation
+        DBoW2::BowVector currentBowVec;
+        DBoW2::FeatureVector currentFeatVec;
 
-        // Compute BoW vector
-        DBoW2::BowVector BowVec;
-        mpVocabulary->transform(vCurrentDesc, BowVec);
+        // Convert descriptors to BoW representation
+        mpVocabulary->transform(descriptors, currentBowVec, currentFeatVec, 4);
 
-        // Find keyframes with similar BoW vectors
-        std::vector<std::pair<float, ORB_SLAM3::KeyFrame *>> scoreKFs;
+        std::vector<std::pair<float, ORB_SLAM3::KeyFrame *>> vScoreAndMatch;
 
         for (auto pKF : mvKeyFrames)
         {
-            if (pKF && !pKF->isBad())
+            if (pKF && !pKF->isBad() && !pKF->mBowVec.empty())
             {
                 // Compute similarity score
-                float score = mpVocabulary->score(BowVec, pKF->mBowVec);
+                float score = mpVocabulary->score(currentBowVec, pKF->mBowVec);
+
                 if (score > mBowThreshold)
-                { // Use threshold from config
-                    scoreKFs.push_back(std::make_pair(score, pKF));
+                {
+                    vScoreAndMatch.push_back(std::make_pair(score, pKF));
                 }
             }
         }
 
-        // Sort by score
-        std::sort(scoreKFs.begin(), scoreKFs.end(),
+        // Sort by score (highest first)
+        std::sort(vScoreAndMatch.begin(), vScoreAndMatch.end(),
                   [](const auto &a, const auto &b)
                   { return a.first > b.first; });
 
-        // Return top candidates (from config)
-        int nCandidates = std::min(mMaxCandidates, (int)scoreKFs.size());
+        // Take top candidates
+        int nCandidates = std::min(mMaxCandidates, (int)vScoreAndMatch.size());
         for (int i = 0; i < nCandidates; i++)
         {
-            candidates.push_back(scoreKFs[i].second);
+            vpCandidates.push_back(vScoreAndMatch[i].second);
+            std::cout << "[DEBUG] Candidate " << i << ": KF "
+                      << vScoreAndMatch[i].second->mnId
+                      << " (score: " << vScoreAndMatch[i].first << ")" << std::endl;
         }
 
-        return candidates;
+        std::cout << "[DEBUG] Found " << vpCandidates.size() << " candidate keyframes" << std::endl;
+        return vpCandidates;
+    }
+
+    void RelocalizationModule::debugStatus()
+    {
+        std::cout << "\n=== RELOCALIZATION MODULE STATUS ===" << std::endl;
+        std::cout << "Vocabulary loaded: " << (mpVocabulary ? "YES" : "NO") << std::endl;
+        if (mpVocabulary)
+        {
+            std::cout << "  Vocabulary size: " << mpVocabulary->size() << std::endl;
+        }
+        std::cout << "Database created: " << (mpKeyFrameDB ? "YES" : "NO") << std::endl;
+        std::cout << "KeyFrames loaded: " << mvKeyFrames.size() << std::endl;
+
+        int bowCount = 0;
+        for (auto pKF : mvKeyFrames)
+        {
+            if (pKF && !pKF->mBowVec.empty())
+                bowCount++;
+        }
+        std::cout << "  KeyFrames with BoW: " << bowCount << std::endl;
+        std::cout << "Map points: " << mvMapPoints.size() << std::endl;
+        std::cout << "  Visualization points: " << mMapPointsViz.size() << std::endl;
+        std::cout << "====================================" << std::endl;
     }
 
     bool RelocalizationModule::matchWithKeyFrame(
