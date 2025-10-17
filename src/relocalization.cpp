@@ -47,6 +47,17 @@ namespace Relocalization
             std::cout << "[INFO] KeyFrame database created" << std::endl;
         }
 
+        if (bVocLoad)
+        {
+            std::cout << "[INFO] Vocabulary loaded successfully." << std::endl;
+            std::cout << "[INFO] Vocabulary empty()? " << (mpVocabulary->empty() ? "YES" : "NO") << std::endl;
+            std::cout << "[INFO] Vocabulary size() (words): " << mpVocabulary->size() << std::endl;
+        }
+        else
+        {
+            std::cerr << "[ERROR] Failed to load vocabulary from: " << mVocabPath << std::endl;
+        }
+
         // Initialize ORB extractor with settings from config
         mpORBextractor = std::make_unique<ORB_SLAM3::ORBextractor>(1000, 1.2, 8, 20, 7);
 
@@ -191,6 +202,23 @@ namespace Relocalization
             }
         }
 
+        // setelah ComputeBoW() + add ke DB
+        int cntKFwithBoW = 0;
+        for (auto pKF : mvKeyFrames)
+        {
+            if (pKF && !pKF->mBowVec.empty())
+                cntKFwithBoW++;
+        }
+        std::cout << "[DEBUG] KeyFrames total: " << mvKeyFrames.size()
+                  << ", KeyFrames with BoW: " << cntKFwithBoW << std::endl;
+
+        std::cout << "[DEBUG] KeyFrameDB size (if method exists): ";
+#ifdef HAVE_KFDB_SIZE_METHOD
+        std::cout << mpKeyFrameDB->size() << std::endl;
+#else
+        std::cout << "(no size() method available in this DB impl)" << std::endl;
+#endif
+
         std::cout << "[INFO] BoW computed for " << processedCount << " keyframes" << std::endl;
         // ============ END OF NEW SECTION ============
 
@@ -273,7 +301,7 @@ namespace Relocalization
 
         // Relocalization settings (with defaults)
         mFrameSkip = fs["Relocalization.FrameSkip"].empty() ? 5 : (int)fs["Relocalization.FrameSkip"];
-        mMinInliers = fs["Relocalization.MinInliers"].empty() ? 8 : (int)fs["Relocalization.MinInliers"];
+        mMinInliers = fs["Relocalization.MinInliers"].empty() ? 1 : (int)fs["Relocalization.MinInliers"];
         mMinMatches = fs["Relocalization.MinMatches"].empty() ? 10 : (int)fs["Relocalization.MinMatches"];
         mBowThreshold = fs["Relocalization.BowSimilarityThreshold"].empty() ? 0.05f : (float)fs["Relocalization.BowSimilarityThreshold"];
         mMaxCandidates = fs["Relocalization.MaxCandidates"].empty() ? 5 : (int)fs["Relocalization.MaxCandidates"];
@@ -348,7 +376,6 @@ namespace Relocalization
     std::vector<ORB_SLAM3::KeyFrame *> RelocalizationModule::detectRelocalizationCandidates(
         const cv::Mat &descriptors)
     {
-        std::cout << "[DEBUG] Finding candidate keyframes..." << std::endl;
 
         std::vector<ORB_SLAM3::KeyFrame *> vpCandidates;
 
@@ -358,15 +385,47 @@ namespace Relocalization
             return vpCandidates;
         }
 
+        std::cout << "[DEBUG] Manual BoW-based matching..." << std::endl;
+
         // manual BoW-based matching computation
         DBoW2::BowVector currentBowVec;
         DBoW2::FeatureVector currentFeatVec;
 
-        // Convert descriptors to BoW representation
-        mpVocabulary->transform(descriptors, currentBowVec, currentFeatVec, 4);
+        std::cout << "[DEBUG] Converting descriptors to BoW representation..." << std::endl;
+        std::cout << "Descriptor size: " << descriptors.rows << "x" << descriptors.cols
+                  << " type=" << descriptors.type() << std::endl;
 
+        if (descriptors.empty())
+        {
+            std::cerr << "[ERROR] descriptors.empty() == true -> skipping BoW transform\n";
+            return vpCandidates;
+        }
+        std::cout << "[DEBUG] Descriptor size: " << descriptors.rows << "x" << descriptors.cols
+                  << " type=" << descriptors.type() << std::endl;
+
+        if (mpVocabulary->empty())
+        {
+            std::cerr << "[ERROR] Vocabulary is EMPTY before transform. Check load path and format.\n";
+            return vpCandidates;
+        }
+        std::cout << "[DEBUG] Vocabulary size (words): " << mpVocabulary->size() << std::endl;
+
+        // prepare vector<Mat> version (recommended)
+        std::vector<cv::Mat> vCurrentDesc;
+        vCurrentDesc.reserve(descriptors.rows);
+        for (int i = 0; i < descriptors.rows; ++i)
+        {
+            vCurrentDesc.push_back(descriptors.row(i).clone()); // clone untuk safety
+        }
+
+        // Convert descriptors to BoW representation
+        mpVocabulary->transform(vCurrentDesc, currentBowVec, currentFeatVec, 4);
+
+        std::cout << "[DEBUG] BoW vector size: " << currentBowVec.size()
+                  << ", Feature vector size: " << currentFeatVec.size() << std::endl;
         std::vector<std::pair<float, ORB_SLAM3::KeyFrame *>> vScoreAndMatch;
 
+        std::cout << "[DEBUG] Compute similarity score..." << std::endl;
         for (auto pKF : mvKeyFrames)
         {
             if (pKF && !pKF->isBad() && !pKF->mBowVec.empty())
@@ -380,6 +439,8 @@ namespace Relocalization
                 }
             }
         }
+
+        std::cout << "[DEBUG] Sort by score..." << std::endl;
 
         // Sort by score (highest first)
         std::sort(vScoreAndMatch.begin(), vScoreAndMatch.end(),
@@ -482,33 +543,61 @@ namespace Relocalization
                                         std::vector<int> &inliers)
     {
 
+        std::cout << "[DEBUG] Check points3D size, with size mMinMatched: " << (size_t)mMinMatches << std::endl;
+
         if (points3D.size() < (size_t)mMinMatches)
         {
             return false;
         }
 
+        // for (int i = 0; i <= points3D.size(); i++)
+        // {
+        //     cv::Point3f pg = points3D[i];
+        //     if (!cv::checkRange(pg.x) || !cv::checkRange(pg.y) || !cv::checkRange(pg.z))
+        //     {
+        //         std::cout << "[WARN] Invalid 3D point at index " << i << ": " << pg << std::endl;
+        //     }
+
+        //     std::cout << "[DEBUG] PnP Input sizes: 3D=" << points3D.size()
+        //               << ", 2D=" << points2D.size() << std::endl;
+        // }
+
+        if (points3D.size() > 0)
+        {
+            std::cout << "[DEBUG] Sample 3D point: " << points3D[0] << std::endl;
+            std::cout << "[DEBUG] Sample 2D point: " << points2D[0] << std::endl;
+        }
+
+        std::cout << "[DEBUG] Camera matrix: " << mK << std::endl;
+
+        std::cout << "Solve PnP with RANSAC" << std::endl;
         // Solve PnP with RANSAC
         cv::Mat inliersMask;
         bool success = cv::solvePnPRansac(points3D, points2D, mK, mDistCoef,
-                                          rvec, tvec, false, 100, 8.0, 0.99,
+                                          rvec, tvec, false, 300, 8.0, 0.9,
                                           inliersMask, cv::SOLVEPNP_EPNP);
 
         if (!success)
         {
+            std::cout << "Failed solve PnP with RANSAC" << std::endl;
             return false;
         }
 
         // Count inliers
         inliers.clear();
-        for (int i = 0; i < inliersMask.rows; i++)
-        {
-            if (inliersMask.at<uchar>(i))
-            {
-                inliers.push_back(i);
-            }
-        }
+        int numInliers = cv::countNonZero(inliersMask);
+        std::cout << "[DEBUG] Total Inliers size: " << numInliers << std::endl;
+        // for (int i = 0; i < inliersMask.rows; i++)
+        // {
+        //     if (inliersMask.at<uchar>(i))
+        //     {
+        //         inliers.push_back(i);
+        //     }
+        // }
 
-        return inliers.size() >= (size_t)mMinInliers; // Use config value
+        // std::cout << "[DEBUG] Check Inliers size: " << inliers.size() << std::endl;
+
+        return numInliers >= (size_t)mMinInliers; // Use config value
     }
 
     cv::Point3f RelocalizationModule::computePosition(const cv::Mat &rvec,
