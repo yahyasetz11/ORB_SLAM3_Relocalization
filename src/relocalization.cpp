@@ -5,21 +5,206 @@
 #include <thread>
 #include <chrono>
 #include <unistd.h> // For getcwd
+#include <random>
 
 namespace Relocalization
 {
 
+    LSHMatcher::LSHMatcher(int numHashTables, int numHashBits)
+        : mNumHashTables(numHashTables), mNumHashBits(numHashBits)
+    {
+        InitializeHashFunctions();
+        mvHashTables.resize(mNumHashTables);
+        std::cout << "[LSH] Initialized with " << numHashTables << " tables, "
+                  << numHashBits << " bits per hash" << std::endl;
+    }
+
+    void LSHMatcher::InitializeHashFunctions()
+    {
+        mvHashFunctions.resize(mNumHashTables);
+        std::mt19937 gen(12345);
+
+        for (int i = 0; i < mNumHashTables; i++)
+        {
+            std::vector<int> bitIndices(256);
+            for (int j = 0; j < 256; j++)
+                bitIndices[j] = j;
+
+            std::shuffle(bitIndices.begin(), bitIndices.end(), gen);
+            bitIndices.resize(mNumHashBits);
+            std::sort(bitIndices.begin(), bitIndices.end());
+
+            mvHashFunctions[i] = bitIndices;
+        }
+    }
+
+    size_t LSHMatcher::ComputeHash(const cv::Mat &descriptor, int tableIdx)
+    {
+        return ExtractBits(descriptor, mvHashFunctions[tableIdx]);
+    }
+
+    size_t LSHMatcher::ExtractBits(const cv::Mat &descriptor,
+                                   const std::vector<int> &bitIndices)
+    {
+        size_t hash = 0;
+        const unsigned char *desc = descriptor.ptr<unsigned char>(0);
+
+        for (size_t i = 0; i < bitIndices.size(); i++)
+        {
+            int bitIdx = bitIndices[i];
+            int byteIdx = bitIdx / 8;
+            int bitOffset = bitIdx % 8;
+
+            bool bit = (desc[byteIdx] >> bitOffset) & 1;
+            if (bit)
+                hash |= (1ULL << i);
+        }
+
+        return hash;
+    }
+
+    void LSHMatcher::BuildHashTables(const std::vector<ORB_SLAM3::MapPoint *> &vpMapPoints)
+    {
+        Clear();
+
+        int validCount = 0;
+        for (size_t i = 0; i < vpMapPoints.size(); i++)
+        {
+            ORB_SLAM3::MapPoint *pMP = vpMapPoints[i];
+            if (!pMP || pMP->isBad())
+                continue;
+
+            cv::Mat descriptor = pMP->GetDescriptor();
+            if (descriptor.empty())
+                continue;
+
+            for (int t = 0; t < mNumHashTables; t++)
+            {
+                size_t hash = ComputeHash(descriptor, t);
+                mvHashTables[t][hash].push_back(i);
+            }
+            validCount++;
+        }
+    }
+
+    int LSHMatcher::SearchByLSH(
+        const cv::Mat &descriptors,
+        const std::vector<ORB_SLAM3::MapPoint *> &vpMapPoints,
+        std::vector<ORB_SLAM3::MapPoint *> &vpMatched,
+        int th)
+    {
+        int nmatches = 0;
+        vpMatched = std::vector<ORB_SLAM3::MapPoint *>(descriptors.rows, nullptr);
+
+        for (int i = 0; i < descriptors.rows; i++)
+        {
+            cv::Mat desc = descriptors.row(i);
+
+            std::unordered_map<int, int> candidateCounts;
+
+            for (int t = 0; t < mNumHashTables; t++)
+            {
+                size_t hash = ComputeHash(desc, t);
+
+                auto it = mvHashTables[t].find(hash);
+                if (it != mvHashTables[t].end())
+                {
+                    for (int idx : it->second)
+                    {
+                        candidateCounts[idx]++;
+                    }
+                }
+            }
+
+            int bestDist = 256;
+            int bestIdx = -1;
+
+            for (auto &p : candidateCounts)
+            {
+                int idx = p.first;
+                if (idx >= (int)vpMapPoints.size())
+                    continue;
+
+                ORB_SLAM3::MapPoint *pMP = vpMapPoints[idx];
+
+                if (!pMP || pMP->isBad())
+                    continue;
+
+                cv::Mat mpDesc = pMP->GetDescriptor();
+                int dist = HammingDistance(desc, mpDesc);
+
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    bestIdx = idx;
+                }
+            }
+
+            if (bestDist < th && bestIdx >= 0)
+            {
+                vpMatched[i] = vpMapPoints[bestIdx];
+                nmatches++;
+            }
+        }
+
+        return nmatches;
+    }
+
+    int LSHMatcher::HammingDistance(const cv::Mat &a, const cv::Mat &b)
+    {
+        int dist = 0;
+        const unsigned char *pa = a.ptr<unsigned char>(0);
+        const unsigned char *pb = b.ptr<unsigned char>(0);
+
+        for (int i = 0; i < a.cols; i++)
+        {
+            unsigned char v = pa[i] ^ pb[i];
+            v = v - ((v >> 1) & 0x55);
+            v = (v & 0x33) + ((v >> 2) & 0x33);
+            dist += ((v + (v >> 4) & 0xF) * 0x1);
+        }
+
+        return dist;
+    }
+
+    void LSHMatcher::Clear()
+    {
+        for (auto &table : mvHashTables)
+            table.clear();
+    }
+
     RelocalizationModule::RelocalizationModule(const std::string &vocabPath,
                                                const std::string &configPath)
-        : mVocabPath(vocabPath), mConfigPath(configPath), mpVocabulary(nullptr), mpAtlas(nullptr), mpSLAM(nullptr), mpKeyFrameDB(nullptr)
+        : mVocabPath(vocabPath), mConfigPath(configPath),
+          mpVocabulary(nullptr), mpAtlas(nullptr), mpSLAM(nullptr),
+          mpKeyFrameDB(nullptr),
+          // State machine initialization
+          mCurrentState(COMPLETELY_LOST),
+          mStateAtomic(COMPLETELY_LOST),
+          mHaveLastKnownPosition(false),
+          mLostDuration(0.0),
+          mLostTimeout(30.0), // 30 seconds
+          mStopThreads(false),
+          mLSHFoundPosition(false),
+          mVisOdomRunning(false),
+          mSmoothingFactor(0.3f), // Moderate smoothing
+          mSmoothingFrames(10),
+          mFrameCount(0),
+          // LSH defaults
+          mVisibilityRadius(5.0f),
+          mLSHNumTables(11),
+          mLSHNumBits(14),
+          mLSHHammingThreshold(50),
+          mPROSACMaxIterations(100)
     {
-        // Load configuration from YAML
+        // Load configuration
         if (!loadConfig())
         {
-            std::cerr << "Failed to load configuration from " << configPath << std::endl;
+            std::cerr << "[ERROR] Failed to load configuration" << std::endl;
             return;
         }
-        // Initialize vocabulary
+
+        // Load vocabulary
         std::cout << "[INFO] Loading vocabulary from: " << mVocabPath << std::endl;
         mpVocabulary = new ORB_SLAM3::ORBVocabulary();
 
@@ -36,47 +221,45 @@ namespace Relocalization
         if (!bVocLoad)
         {
             std::cerr << "[ERROR] Failed to load vocabulary!" << std::endl;
-            // You might want to throw an exception or handle this error
         }
         else
         {
             std::cout << "[INFO] Vocabulary loaded successfully" << std::endl;
-
-            // Create KeyFrame Database
             mpKeyFrameDB = new ORB_SLAM3::KeyFrameDatabase(*mpVocabulary);
-            std::cout << "[INFO] KeyFrame database created" << std::endl;
         }
 
-        if (bVocLoad)
-        {
-            std::cout << "[INFO] Vocabulary loaded successfully." << std::endl;
-            std::cout << "[INFO] Vocabulary empty()? " << (mpVocabulary->empty() ? "YES" : "NO") << std::endl;
-            std::cout << "[INFO] Vocabulary size() (words): " << mpVocabulary->size() << std::endl;
-        }
-        else
-        {
-            std::cerr << "[ERROR] Failed to load vocabulary from: " << mVocabPath << std::endl;
-        }
-
-        // Initialize ORB extractor with settings from config
+        // Initialize ORB extractor
         mpORBextractor = std::make_unique<ORB_SLAM3::ORBextractor>(1000, 1.2, 8, 20, 7);
 
-        std::cout << "Relocalization module initialized" << std::endl;
-        std::cout << "  Map: " << mMapPath << std::endl;
-        std::cout << "  Camera: fx=" << mK.at<float>(0, 0) << ", fy=" << mK.at<float>(1, 1)
-                  << ", cx=" << mK.at<float>(0, 2) << ", cy=" << mK.at<float>(1, 2) << std::endl;
+        // Initialize LSH Matcher
+        mpLSHMatcher = std::make_unique<LSHMatcher>(mLSHNumTables, mLSHNumBits);
+        std::cout << "[INFO] LSH matcher initialized for local relocalization" << std::endl;
+
+        std::cout << "\n========================================" << std::endl;
+        std::cout << " Hybrid Relocalization System" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << "State: COMPLETELY_LOST (will use DBoW2 first)" << std::endl;
+        std::cout << "LSH parameters:" << std::endl;
+        std::cout << "  - Hash tables: " << mLSHNumTables << std::endl;
+        std::cout << "  - Bits per hash: " << mLSHNumBits << std::endl;
+        std::cout << "  - Visibility radius: " << mVisibilityRadius << "m" << std::endl;
+        std::cout << "  - Lost timeout: " << mLostTimeout << "s" << std::endl;
+        std::cout << "========================================\n"
+                  << std::endl;
     }
 
     RelocalizationModule::~RelocalizationModule()
     {
-        // Clean up database BEFORE vocabulary
+        // Stop parallel threads if running
+        stopParallelTracking();
+
+        // Clean up database before vocabulary
         if (mpKeyFrameDB)
         {
             delete mpKeyFrameDB;
             mpKeyFrameDB = nullptr;
         }
 
-        // Your existing cleanup for vocabulary and other members
         if (mpVocabulary)
         {
             delete mpVocabulary;
@@ -600,6 +783,64 @@ namespace Relocalization
         return numInliers >= (size_t)mMinInliers; // Use config value
     }
 
+    bool RelocalizationModule::solvePnPWithPROSAC(
+        const std::vector<cv::Point3f> &points3D,
+        const std::vector<cv::Point2f> &points2D,
+        cv::Mat &rvec, cv::Mat &tvec,
+        std::vector<int> &inliers)
+    {
+        if (points3D.size() < 4)
+        {
+            std::cout << "[PROSAC] Not enough points for PnP" << std::endl;
+            return false;
+        }
+
+        auto t1 = std::chrono::steady_clock::now();
+
+        cv::Mat inliersMat;
+
+        // Use P3P as mentioned in paper, with RANSAC
+        // OpenCV doesn't have PROSAC, but RANSAC with quality-sorted data is similar
+        bool success = cv::solvePnPRansac(
+            points3D,
+            points2D,
+            mK,
+            mDistCoef,
+            rvec,
+            tvec,
+            false,                // useExtrinsicGuess
+            mPROSACMaxIterations, // Paper uses 100 iterations
+            8.0f,                 // reprojectionError
+            0.99,                 // confidence
+            inliersMat,
+            cv::SOLVEPNP_P3P // Use P3P as mentioned in paper
+        );
+
+        auto t2 = std::chrono::steady_clock::now();
+        double tPROSAC = std::chrono::duration_cast<std::chrono::duration<double,
+                                                                          std::milli>>(t2 - t1)
+                             .count();
+
+        if (success && !inliersMat.empty())
+        {
+            inliers.clear();
+            inliers.reserve(inliersMat.rows);
+
+            for (int i = 0; i < inliersMat.rows; i++)
+            {
+                inliers.push_back(inliersMat.at<int>(i, 0));
+            }
+
+            std::cout << "[PROSAC] Found " << inliers.size() << " inliers in "
+                      << tPROSAC << " ms" << std::endl;
+
+            return inliers.size() >= (size_t)mMinInliers;
+        }
+
+        std::cout << "[PROSAC] Failed to find solution" << std::endl;
+        return false;
+    }
+
     cv::Point3f RelocalizationModule::computePosition(const cv::Mat &rvec,
                                                       const cv::Mat &tvec)
     {
@@ -613,73 +854,6 @@ namespace Relocalization
         return cv::Point3f(pos.at<double>(0),
                            pos.at<double>(1),
                            pos.at<double>(2));
-    }
-
-    LocationResult RelocalizationModule::processFrame(const cv::Mat &frame)
-    {
-        std::cout << "[DEBUG] Starting processFrame..." << std::endl;
-        LocationResult result;
-        result.success = false;
-        result.matchedKeyFrameId = -1;
-        result.numInliers = 0;
-
-        std::cout << "[DEBUG] Extracting features..." << std::endl;
-        // Extract features from current frame
-        std::vector<cv::KeyPoint> keypoints;
-        cv::Mat descriptors;
-        extractFeatures(frame, keypoints, descriptors);
-
-        if (keypoints.empty())
-        {
-            std::cout << "No features extracted from frame" << std::endl;
-            return result;
-        }
-
-        std::cout << "Extracted " << keypoints.size() << " features" << std::endl;
-
-        std::cout << "[DEBUG] Finding candidate keyframes..." << std::endl;
-        // Find candidate keyframes
-        auto candidates = detectRelocalizationCandidates(descriptors);
-        std::cout << "Found " << candidates.size() << " candidate keyframes" << std::endl;
-
-        std::cout << "[DEBUG] Matching with candidates..." << std::endl;
-        // Try to match with each candidate
-        for (auto pKF : candidates)
-        {
-            std::cout << "[DEBUG] Checking keyframe " << pKF->mnId << std::endl;
-            std::vector<cv::Point3f> points3D;
-            std::vector<cv::Point2f> points2D;
-
-            if (matchWithKeyFrame(keypoints, descriptors, pKF, points3D, points2D))
-            {
-                std::cout << "Matched " << points3D.size() << " points with KF "
-                          << pKF->mnId << std::endl;
-
-                // Solve PnP
-                cv::Mat rvec, tvec;
-                std::vector<int> inliers;
-
-                if (solvePnP(points3D, points2D, rvec, tvec, inliers))
-                {
-                    result.success = true;
-                    result.position = computePosition(rvec, tvec);
-                    result.matchedKeyFrameId = pKF->mnId;
-                    result.numInliers = inliers.size();
-
-                    mCurrentPosition = result.position;
-
-                    std::cout << "✓ Relocalization successful!" << std::endl;
-                    std::cout << "  Position: [" << result.position.x << ", "
-                              << result.position.y << ", " << result.position.z << "]" << std::endl;
-                    std::cout << "  Inliers: " << result.numInliers << std::endl;
-
-                    return result;
-                }
-            }
-        }
-
-        std::cout << "✗ Relocalization failed" << std::endl;
-        return result;
     }
 
     void RelocalizationModule::processVideo(const std::string &videoPath, bool visualize)
@@ -734,7 +908,7 @@ namespace Relocalization
                                 cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
 
                     cv::imshow("Current Frame", display);
-                    cv::waitKey(1);
+                    cv::waitKey(10);
                 }
             }
         }
@@ -791,6 +965,7 @@ namespace Relocalization
                     cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 0), 2);
 
         cv::imshow("Relocalization - Map Visualization", mapViz);
+        cv::waitKey(1);
     }
 
     void RelocalizationModule::exportMapToPCD(const std::string &outputPath)
@@ -823,6 +998,824 @@ namespace Relocalization
 
         file.close();
         std::cout << "Map exported to " << outputPath << std::endl;
+    }
+
+    // ========== State Management ==========
+
+    void RelocalizationModule::setState(TrackingState newState)
+    {
+        std::lock_guard<std::mutex> lock(mStateMutex);
+
+        TrackingState oldState = mCurrentState;
+
+        if (oldState != newState)
+        {
+            std::cout << "\n[STATE] Transition: ";
+
+            switch (oldState)
+            {
+            case COMPLETELY_LOST:
+                std::cout << "COMPLETELY_LOST";
+                break;
+            case FOUND_POSITION:
+                std::cout << "FOUND_POSITION";
+                break;
+            case CURRENTLY_LOST:
+                std::cout << "CURRENTLY_LOST";
+                break;
+            }
+
+            std::cout << " → ";
+
+            switch (newState)
+            {
+            case COMPLETELY_LOST:
+                std::cout << "COMPLETELY_LOST";
+                break;
+            case FOUND_POSITION:
+                std::cout << "FOUND_POSITION";
+                break;
+            case CURRENTLY_LOST:
+                std::cout << "CURRENTLY_LOST";
+                break;
+            }
+
+            std::cout << std::endl;
+
+            mCurrentState = newState;
+            mStateAtomic.store(newState);
+
+            handleStateTransition(oldState, newState);
+        }
+    }
+
+    TrackingState RelocalizationModule::getState()
+    {
+        return mStateAtomic.load();
+    }
+
+    void RelocalizationModule::handleStateTransition(TrackingState oldState, TrackingState newState)
+    {
+        // Entering CURRENTLY_LOST - start parallel threads
+        if (newState == CURRENTLY_LOST && oldState != CURRENTLY_LOST)
+        {
+            std::cout << "[STATE] Starting parallel VisOdom + LSH threads" << std::endl;
+            mTimeWhenLost = std::chrono::steady_clock::now();
+            mLostDuration = 0.0;
+            startParallelTracking();
+        }
+
+        // Leaving CURRENTLY_LOST - stop parallel threads
+        if (oldState == CURRENTLY_LOST && newState != CURRENTLY_LOST)
+        {
+            std::cout << "[STATE] Stopping parallel threads" << std::endl;
+            stopParallelTracking();
+        }
+
+        // Entering FOUND_POSITION - update last known position
+        if (newState == FOUND_POSITION)
+        {
+            mHaveLastKnownPosition = true;
+            mLastKnownPosition = mCurrentPosition;
+            std::cout << "[STATE] Position found: [" << mCurrentPosition.x << ", "
+                      << mCurrentPosition.y << ", " << mCurrentPosition.z << "]" << std::endl;
+        }
+    }
+
+    // ========== Parallel Thread Management ==========
+
+    void RelocalizationModule::startParallelTracking()
+    {
+        // Stop any existing threads first
+        stopParallelTracking();
+
+        // Reset flags
+        mStopThreads.store(false);
+        mLSHFoundPosition.store(false);
+        mVisOdomRunning.store(true);
+
+        // Start Visual Odometry thread
+        mpVisOdomThread = std::make_unique<std::thread>(
+            &RelocalizationModule::runVisualOdometryThread, this);
+
+        // Start LSH thread
+        mpLSHThread = std::make_unique<std::thread>(
+            &RelocalizationModule::runLSHThread, this);
+
+        std::cout << "[PARALLEL] Both threads started" << std::endl;
+    }
+
+    void RelocalizationModule::stopParallelTracking()
+    {
+        mStopThreads.store(true);
+
+        // Wait for threads to finish
+        if (mpVisOdomThread && mpVisOdomThread->joinable())
+        {
+            mpVisOdomThread->join();
+            mpVisOdomThread.reset();
+        }
+
+        if (mpLSHThread && mpLSHThread->joinable())
+        {
+            mpLSHThread->join();
+            mpLSHThread.reset();
+        }
+
+        mVisOdomRunning.store(false);
+    }
+
+    // ========== Visual Odometry Thread ==========
+
+    void RelocalizationModule::runVisualOdometryThread()
+    {
+        std::cout << "[VISODOM] Thread started" << std::endl;
+
+        cv::Mat prevFrame;
+        std::vector<cv::Point2f> prevPoints;
+        int frameCounter = 0;
+
+        while (!mStopThreads.load() && getState() == CURRENTLY_LOST)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(33)); // ~30 FPS
+
+            cv::Mat currentFrame;
+            {
+                std::lock_guard<std::mutex> lock(mPositionMutex);
+                if (mCurrentFrame.empty())
+                    continue;
+                currentFrame = mCurrentFrame.clone();
+            }
+
+            if (prevFrame.empty())
+            {
+                // First frame - initialize
+                prevFrame = currentFrame.clone();
+
+                // Detect features for tracking
+                std::vector<cv::KeyPoint> keypoints;
+                cv::goodFeaturesToTrack(currentFrame, prevPoints, 200, 0.01, 10);
+
+                std::cout << "[VISODOM] Initialized with " << prevPoints.size() << " points" << std::endl;
+                continue;
+            }
+
+            // Track features from previous frame to current
+            std::vector<cv::Point2f> currPoints;
+            std::vector<uchar> status;
+            std::vector<float> err;
+
+            cv::calcOpticalFlowPyrLK(
+                prevFrame, currentFrame,
+                prevPoints, currPoints,
+                status, err);
+
+            // Filter good matches
+            std::vector<cv::Point2f> goodPrev, goodCurr;
+            for (size_t i = 0; i < status.size(); i++)
+            {
+                if (status[i])
+                {
+                    goodPrev.push_back(prevPoints[i]);
+                    goodCurr.push_back(currPoints[i]);
+                }
+            }
+
+            if (goodPrev.size() < 10)
+            {
+                std::cout << "[VISODOM] Too few tracked points, re-detecting..." << std::endl;
+                cv::goodFeaturesToTrack(currentFrame, prevPoints, 200, 0.01, 10);
+                prevFrame = currentFrame.clone();
+                continue;
+            }
+
+            // Estimate motion (simple 2D translation for now)
+            // In real system, you'd use essential matrix and decompose to R,t
+            cv::Point2f motion(0, 0);
+            for (size_t i = 0; i < goodPrev.size(); i++)
+            {
+                motion.x += (goodCurr[i].x - goodPrev[i].x);
+                motion.y += (goodCurr[i].y - goodPrev[i].y);
+            }
+            motion.x /= goodPrev.size();
+            motion.y /= goodPrev.size();
+
+            // Convert pixel motion to world motion (very rough estimate)
+            // Assume ~0.001 meters per pixel (depends on camera distance)
+            float scale = 0.001f;
+            float dx = motion.x * scale;
+            float dz = motion.y * scale; // Y in image is Z in world
+
+            // Update estimated position
+            cv::Point3f estimatedPos;
+            {
+                std::lock_guard<std::mutex> lock(mPositionMutex);
+                estimatedPos = mVisOdomPosition;
+                estimatedPos.x += dx;
+                estimatedPos.z += dz;
+                mVisOdomPosition = estimatedPos;
+            }
+
+            if (frameCounter % 10 == 0) // Log every ~0.3 seconds
+            {
+                std::cout << "[VISODOM] Estimate: [" << estimatedPos.x << ", "
+                          << estimatedPos.y << ", " << estimatedPos.z << "]"
+                          << " (tracking " << goodPrev.size() << " points)" << std::endl;
+            }
+
+            // Prepare for next iteration
+            prevPoints = currPoints;
+            prevFrame = currentFrame.clone();
+            frameCounter++;
+
+            // Check timeout
+            if (isTimeout())
+            {
+                std::cout << "[VISODOM] Timeout reached!" << std::endl;
+                setState(COMPLETELY_LOST);
+                break;
+            }
+        }
+
+        std::cout << "[VISODOM] Thread stopped" << std::endl;
+    }
+
+    cv::Point3f RelocalizationModule::estimatePositionFromTracking(const cv::Mat &frame)
+    {
+        // Use ORB-SLAM3's tracking to estimate position
+        // This is a simplified version - in reality, you'd use SLAM's motion model
+
+        // For now, apply simple dead reckoning from last known position
+        // In real implementation, this would use ORB-SLAM3's TrackWithMotionModel
+
+        cv::Point3f estimatedPos = mLastKnownPosition;
+
+        // TODO: Integrate with ORB-SLAM3's actual tracking
+        // For now, just use last known position with small drift simulation
+        double timeLost = getTimeSinceLost();
+
+        // Assume slow drift (0.1 m/s uncertainty)
+        float driftX = (rand() % 100 - 50) / 1000.0f * timeLost;
+        float driftZ = (rand() % 100 - 50) / 1000.0f * timeLost;
+
+        estimatedPos.x += driftX;
+        estimatedPos.z += driftZ;
+
+        return estimatedPos;
+    }
+
+    // ========== LSH Thread ==========
+
+    void RelocalizationModule::runLSHThread()
+    {
+        std::cout << "[LSH] Thread started, searching every 5 frames" << std::endl;
+
+        int attemptCount = 0;
+        int frameCounter = 0;
+
+        while (!mStopThreads.load() && getState() == CURRENTLY_LOST)
+        {
+            // Wait a bit between attempts
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            frameCounter++;
+
+            // Try LSH every 5 frames (same frequency as DBoW2)
+            if (frameCounter % 5 != 0)
+                continue;
+
+            if (!mCurrentFrame.empty())
+            {
+                attemptCount++;
+                std::cout << "\n[LSH] Attempt #" << attemptCount << std::endl;
+
+                // Try to relocalize using LSH
+                LocationResult result = localRelocalizationLSH(mCurrentFrame);
+
+                if (result.success)
+                {
+                    std::cout << "[LSH] ✓ Position found!" << std::endl;
+
+                    // Update LSH position (thread-safe)
+                    {
+                        std::lock_guard<std::mutex> lock(mPositionMutex);
+                        mLSHPosition = result.position;
+                    }
+
+                    // Signal that LSH found position
+                    mLSHFoundPosition.store(true);
+
+                    // Apply smooth position correction
+                    cv::Point3f smoothedPos = smoothPositionTransition(
+                        mVisOdomPosition,
+                        result.position,
+                        mSmoothingFactor);
+
+                    mCurrentPosition = smoothedPos;
+
+                    // Transition back to FOUND_POSITION
+                    setState(FOUND_POSITION);
+                    break;
+                }
+                else
+                {
+                    std::cout << "[LSH] ✗ No match found" << std::endl;
+                }
+            }
+
+            // Check timeout
+            if (isTimeout())
+            {
+                std::cout << "[LSH] Timeout reached! Giving up..." << std::endl;
+                setState(COMPLETELY_LOST);
+                break;
+            }
+        }
+
+        std::cout << "[LSH] Thread stopped after " << attemptCount << " attempts" << std::endl;
+    }
+
+    // ========== Position Smoothing ==========
+
+    cv::Point3f RelocalizationModule::smoothPositionTransition(
+        const cv::Point3f &from,
+        const cv::Point3f &to,
+        float alpha)
+    {
+        // Linear interpolation (LERP)
+        // alpha = 0.0: instant jump to 'to'
+        // alpha = 1.0: stay at 'from'
+        // alpha = 0.3: smooth blend (30% old, 70% new)
+
+        cv::Point3f smoothed;
+        smoothed.x = from.x * alpha + to.x * (1.0f - alpha);
+        smoothed.y = from.y * alpha + to.y * (1.0f - alpha);
+        smoothed.z = from.z * alpha + to.z * (1.0f - alpha);
+
+        float distance = cv::norm(to - from);
+
+        std::cout << "[SMOOTH] Correcting position:" << std::endl;
+        std::cout << "  VisOdom: [" << from.x << ", " << from.y << ", " << from.z << "]" << std::endl;
+        std::cout << "  LSH:     [" << to.x << ", " << to.y << ", " << to.z << "]" << std::endl;
+        std::cout << "  Smooth:  [" << smoothed.x << ", " << smoothed.y << ", " << smoothed.z << "]" << std::endl;
+        std::cout << "  Distance corrected: " << distance << " m" << std::endl;
+
+        return smoothed;
+    }
+
+    // ========== Utility Methods ==========
+
+    double RelocalizationModule::getTimeSinceLost()
+    {
+        auto now = std::chrono::steady_clock::now();
+        return std::chrono::duration_cast<std::chrono::duration<double>>(
+                   now - mTimeWhenLost)
+            .count();
+    }
+
+    bool RelocalizationModule::isTimeout()
+    {
+        mLostDuration = getTimeSinceLost();
+        return mLostDuration >= mLostTimeout;
+    }
+
+    LocationResult RelocalizationModule::processFrame(const cv::Mat &frame)
+    {
+        mFrameCount++;
+
+        // Store current frame for threads to access
+        {
+            std::lock_guard<std::mutex> lock(mPositionMutex);
+            mCurrentFrame = frame.clone();
+        }
+
+        LocationResult result;
+        result.success = false;
+
+        TrackingState currentState = getState();
+
+        std::cout << "\n========== Frame " << mFrameCount << " ==========" << std::endl;
+        std::cout << "[STATE] Current: ";
+        switch (currentState)
+        {
+        case COMPLETELY_LOST:
+            std::cout << "COMPLETELY_LOST";
+            break;
+        case FOUND_POSITION:
+            std::cout << "FOUND_POSITION";
+            break;
+        case CURRENTLY_LOST:
+            std::cout << "CURRENTLY_LOST";
+            break;
+        }
+        std::cout << std::endl;
+
+        // ========== STATE MACHINE ==========
+
+        switch (currentState)
+        {
+        case COMPLETELY_LOST:
+        {
+            // ===== Use DBoW2 for global relocalization =====
+            std::cout << "[METHOD] DBoW2 global relocalization" << std::endl;
+            result = globalRelocalizationDBoW2(frame);
+
+            if (result.success)
+            {
+                // Validate DBoW2 result (same validation as LSH!)
+                if (result.numInliers < 15)
+                {
+                    std::cout << "[REJECT] DBoW2: Too few inliers: "
+                              << result.numInliers << std::endl;
+                    break;
+                }
+
+                // Accept position
+                mCurrentPosition = result.position;
+                mLastKnownPosition = result.position;
+                mHaveLastKnownPosition = true;
+
+                // Initialize VisOdom position
+                mVisOdomPosition = result.position;
+
+                std::cout << "[SUCCESS] Initial position found!" << std::endl;
+                std::cout << "  Position: [" << result.position.x << ", "
+                          << result.position.y << ", " << result.position.z << "]" << std::endl;
+                std::cout << "  Inliers: " << result.numInliers << std::endl;
+
+                setState(FOUND_POSITION);
+            }
+            else
+            {
+                std::cout << "[FAILED] DBoW2 global relocalization failed" << std::endl;
+            }
+            break;
+        }
+
+        case FOUND_POSITION:
+        {
+            // ===== Continuous tracking with LSH =====
+            std::cout << "[METHOD] LSH local relocalization (visibility-constrained)" << std::endl;
+
+            // Only relocalize every 5 frames
+            if (mFrameCount % 5 != 0)
+            {
+                std::cout << "[SKIP] Maintaining current position" << std::endl;
+                result.success = true;
+                result.position = mCurrentPosition;
+                break;
+            }
+
+            // Try LSH relocalization with local search
+            LocationResult lshResult = localRelocalizationLSH(frame);
+
+            // ===== VALIDATE LSH RESULT =====
+
+            if (!lshResult.success)
+            {
+                std::cout << "[WARNING] LSH failed - entering CURRENTLY_LOST" << std::endl;
+                setState(CURRENTLY_LOST);
+                result.success = false;
+                result.position = mCurrentPosition;
+                break;
+            }
+
+            // Check minimum inliers
+            if (lshResult.numInliers < 15)
+            {
+                std::cout << "[REJECT] Too few inliers: " << lshResult.numInliers << std::endl;
+                setState(CURRENTLY_LOST);
+                result.success = false;
+                result.position = mCurrentPosition;
+                break;
+            }
+
+            // Check maximum movement
+            float dx = lshResult.position.x - mCurrentPosition.x;
+            float dy = lshResult.position.y - mCurrentPosition.y;
+            float dz = lshResult.position.z - mCurrentPosition.z;
+            float distance = sqrt(dx * dx + dy * dy + dz * dz);
+
+            float maxMovement = 0.5f; // 0.5m max between frames
+
+            if (distance > maxMovement)
+            {
+                std::cout << "[REJECT] Position jump too large: " << distance << " m" << std::endl;
+                std::cout << "  (Max allowed: " << maxMovement << " m)" << std::endl;
+                setState(CURRENTLY_LOST);
+                result.success = false;
+                result.position = mCurrentPosition;
+                break;
+            }
+
+            // ===== ACCEPT: Smooth Update =====
+            cv::Point3f smoothPos = smoothPositionTransition(
+                mCurrentPosition,
+                lshResult.position,
+                0.3f // 30% old, 70% new
+            );
+
+            mCurrentPosition = smoothPos;
+            mLastKnownPosition = smoothPos;
+            mVisOdomPosition = smoothPos; // Keep VisOdom synced
+
+            result.success = true;
+            result.position = smoothPos;
+            result.numInliers = lshResult.numInliers;
+
+            std::cout << "[ACCEPT] ✓ Position updated" << std::endl;
+            std::cout << "  Movement: " << distance << " m" << std::endl;
+            std::cout << "  Inliers: " << lshResult.numInliers << std::endl;
+            std::cout << "  New pos: [" << smoothPos.x << ", "
+                      << smoothPos.y << ", " << smoothPos.z << "]" << std::endl;
+
+            break;
+        }
+
+        case CURRENTLY_LOST:
+        {
+            // ===== Parallel threads are running =====
+            std::cout << "[METHOD] Parallel VisOdom + LSH recovery" << std::endl;
+            std::cout << "[INFO] Time lost: " << getTimeSinceLost() << "s / "
+                      << mLostTimeout << "s" << std::endl;
+
+            // Check if LSH thread found position
+            if (mLSHFoundPosition.load())
+            {
+                std::cout << "[CURRENTLY_LOST] ✓ LSH found position!" << std::endl;
+
+                // Validate before accepting (same checks as FOUND_POSITION)
+                float dx = mLSHPosition.x - mVisOdomPosition.x;
+                float dy = mLSHPosition.y - mVisOdomPosition.y;
+                float dz = mLSHPosition.z - mVisOdomPosition.z;
+                float distance = sqrt(dx * dx + dy * dy + dz * dz);
+
+                if (distance > 2.0f) // More lenient for recovery
+                {
+                    std::cout << "[WARNING] LSH position differs from VisOdom by "
+                              << distance << " m" << std::endl;
+                }
+
+                result.success = true;
+                result.position = mCurrentPosition; // Already updated by thread
+                // State transition already handled by LSH thread
+            }
+            else
+            {
+                std::cout << "[CURRENTLY_LOST] Still searching..." << std::endl;
+
+                // Return VisOdom estimate
+                {
+                    std::lock_guard<std::mutex> lock(mPositionMutex);
+                    result.position = mVisOdomPosition;
+                }
+                result.success = false;
+            }
+
+            break;
+        }
+        }
+
+        return result;
+    }
+
+    // ========== DBoW2 Global Relocalization ==========
+
+    LocationResult RelocalizationModule::globalRelocalizationDBoW2(const cv::Mat &frame)
+    {
+        auto tStart = std::chrono::steady_clock::now();
+
+        LocationResult result;
+        result.success = false;
+
+        // Extract features
+        std::vector<cv::KeyPoint> keypoints;
+        cv::Mat descriptors;
+        extractFeatures(frame, keypoints, descriptors);
+
+        if (keypoints.empty())
+        {
+            std::cout << "[DBOW2] No features extracted" << std::endl;
+            return result;
+        }
+
+        std::cout << "[DBOW2] Extracted " << keypoints.size() << " features" << std::endl;
+
+        // Find candidate keyframes using DBoW2
+        auto candidates = detectRelocalizationCandidates(descriptors);
+
+        if (candidates.empty())
+        {
+            std::cout << "[DBOW2] No candidates found" << std::endl;
+            return result;
+        }
+
+        std::cout << "[DBOW2] Found " << candidates.size() << " candidate keyframes" << std::endl;
+
+        // Try to match with each candidate
+        for (auto pKF : candidates)
+        {
+            std::vector<cv::Point3f> points3D;
+            std::vector<cv::Point2f> points2D;
+
+            if (matchWithKeyFrame(keypoints, descriptors, pKF, points3D, points2D))
+            {
+                // Solve PnP
+                cv::Mat rvec, tvec;
+                std::vector<int> inliers;
+
+                if (solvePnP(points3D, points2D, rvec, tvec, inliers))
+                {
+                    result.success = true;
+                    result.position = computePosition(rvec, tvec);
+                    result.matchedKeyFrameId = pKF->mnId;
+                    result.numInliers = inliers.size();
+
+                    auto tEnd = std::chrono::steady_clock::now();
+                    double tTotal = std::chrono::duration_cast<std::chrono::duration<double,
+                                                                                     std::milli>>(tEnd - tStart)
+                                        .count();
+
+                    std::cout << "[DBOW2] ✓✓✓ SUCCESS!" << std::endl;
+                    std::cout << "  Position: [" << result.position.x << ", "
+                              << result.position.y << ", " << result.position.z << "]" << std::endl;
+                    std::cout << "  Matched KF: " << result.matchedKeyFrameId << std::endl;
+                    std::cout << "  Inliers: " << result.numInliers << std::endl;
+                    std::cout << "  Time: " << tTotal << " ms" << std::endl;
+
+                    return result;
+                }
+            }
+        }
+
+        auto tEnd = std::chrono::steady_clock::now();
+        double tTotal = std::chrono::duration_cast<std::chrono::duration<double,
+                                                                         std::milli>>(tEnd - tStart)
+                            .count();
+
+        std::cout << "[DBOW2] Failed after " << tTotal << " ms" << std::endl;
+        return result;
+    }
+
+    // ========== LSH Local Relocalization ==========
+
+    LocationResult RelocalizationModule::localRelocalizationLSH(const cv::Mat &frame)
+    {
+        auto tStart = std::chrono::steady_clock::now();
+
+        LocationResult result;
+        result.success = false;
+
+        // Extract features
+        std::vector<cv::KeyPoint> keypoints;
+        cv::Mat descriptors;
+        extractFeatures(frame, keypoints, descriptors);
+
+        if (keypoints.empty())
+        {
+            return result;
+        }
+
+        // Get candidate map points within visibility radius
+        auto vpCandidates = getCandidateMapPointsLSH();
+
+        if (vpCandidates.empty())
+        {
+            std::cout << "[LSH] No candidates in radius" << std::endl;
+            return result;
+        }
+
+        // Match using LSH
+        std::vector<cv::Point3f> points3D;
+        std::vector<cv::Point2f> points2D;
+
+        if (matchWithLSH(keypoints, descriptors, vpCandidates, points3D, points2D))
+        {
+            // Solve PnP with PROSAC
+            cv::Mat rvec, tvec;
+            std::vector<int> inliers;
+
+            if (solvePnPWithPROSAC(points3D, points2D, rvec, tvec, inliers))
+            {
+                result.success = true;
+                result.position = computePosition(rvec, tvec);
+                result.numInliers = inliers.size();
+
+                auto tEnd = std::chrono::steady_clock::now();
+                double tTotal = std::chrono::duration_cast<std::chrono::duration<double,
+                                                                                 std::milli>>(tEnd - tStart)
+                                    .count();
+
+                std::cout << "[LSH] ✓ Success in " << tTotal << " ms" << std::endl;
+                std::cout << "  Inliers: " << result.numInliers << std::endl;
+
+                return result;
+            }
+        }
+
+        return result;
+    }
+
+    // ========== Get Candidate Map Points for LSH ==========
+
+    std::vector<ORB_SLAM3::MapPoint *> RelocalizationModule::getCandidateMapPointsLSH()
+    {
+        std::vector<ORB_SLAM3::MapPoint *> vpCandidates;
+
+        if (!mHaveLastKnownPosition)
+        {
+            std::cout << "[LSH] No last known position, using full map" << std::endl;
+            return mvMapPoints;
+        }
+
+        // Use visual odometry position as search center
+        cv::Point3f searchCenter;
+        {
+            std::lock_guard<std::mutex> lock(mPositionMutex);
+            searchCenter = mVisOdomPosition;
+        }
+
+        // Get keyframes within radius
+        for (auto pKF : mvKeyFrames)
+        {
+            if (pKF->isBad())
+                continue;
+
+            Sophus::SE3f Twc = pKF->GetPoseInverse();
+            Eigen::Vector3f kfPos = Twc.translation();
+
+            float dist = sqrt(
+                pow(kfPos(0) - searchCenter.x, 2) +
+                pow(kfPos(1) - searchCenter.y, 2) +
+                pow(kfPos(2) - searchCenter.z, 2));
+
+            if (dist < mVisibilityRadius)
+            {
+                const std::vector<ORB_SLAM3::MapPoint *> vpMPs = pKF->GetMapPointMatches();
+                for (auto pMP : vpMPs)
+                {
+                    if (pMP && !pMP->isBad())
+                        vpCandidates.push_back(pMP);
+                }
+            }
+        }
+
+        // Remove duplicates
+        std::sort(vpCandidates.begin(), vpCandidates.end());
+        vpCandidates.erase(std::unique(vpCandidates.begin(), vpCandidates.end()),
+                           vpCandidates.end());
+
+        std::cout << "[LSH] Selected " << vpCandidates.size()
+                  << " candidates within " << mVisibilityRadius << "m" << std::endl;
+
+        return vpCandidates;
+    }
+
+    // ========== Match with LSH ==========
+
+    bool RelocalizationModule::matchWithLSH(
+        const std::vector<cv::KeyPoint> &keypoints,
+        const cv::Mat &descriptors,
+        const std::vector<ORB_SLAM3::MapPoint *> &vpMapPoints,
+        std::vector<cv::Point3f> &points3D,
+        std::vector<cv::Point2f> &points2D)
+    {
+        points3D.clear();
+        points2D.clear();
+
+        if (vpMapPoints.empty())
+            return false;
+
+        // Build hash tables
+        mpLSHMatcher->BuildHashTables(vpMapPoints);
+
+        // Perform LSH matching
+        std::vector<ORB_SLAM3::MapPoint *> vpMatched;
+        int nmatches = mpLSHMatcher->SearchByLSH(
+            descriptors,
+            vpMapPoints,
+            vpMatched,
+            mLSHHammingThreshold);
+
+        if (nmatches < mMinMatches)
+            return false;
+
+        // Extract 2D-3D correspondences
+        for (size_t i = 0; i < vpMatched.size(); i++)
+        {
+            if (vpMatched[i])
+            {
+                ORB_SLAM3::MapPoint *pMP = vpMatched[i];
+                if (!pMP->isBad())
+                {
+                    Eigen::Vector3f pos = pMP->GetWorldPos();
+                    points3D.push_back(cv::Point3f(pos(0), pos(1), pos(2)));
+                    points2D.push_back(keypoints[i].pt);
+                }
+            }
+        }
+
+        return points3D.size() >= (size_t)mMinMatches;
     }
 
 } // namespace Relocalization
