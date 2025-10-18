@@ -125,6 +125,7 @@ namespace Relocalization
         std::chrono::steady_clock::time_point mTimeWhenLost;
         double mLostDuration; // How long we've been lost
         float mLostTimeout;   // 30 seconds default
+        std::atomic<bool> mTimeoutReached;
 
         // ========== NEW: Parallel Thread Management ==========
         std::unique_ptr<std::thread> mpVisOdomThread;

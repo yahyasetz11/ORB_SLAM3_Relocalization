@@ -67,8 +67,8 @@ Viewer.ViewpointZ: -1.8
 Viewer.ViewpointF: 500.0
 
 # ========== DBoW2 Parameters (for COMPLETELY_LOST state) ==========
-Relocalization.BowSimilarityThreshold: 0.018
-Relocalization.MinInliers: 10
+Relocalization.BowSimilarityThreshold: 0.01
+Relocalization.MinInliers: 2
 Relocalization.MinMatches: 10
 Relocalization.MaxCandidates: 5
 
@@ -91,7 +91,7 @@ Relocalization.PROSAC.Confidence: 0.99
 
 # ========== State Machine Parameters ==========
 # Timeout before giving up on LSH and falling back to DBoW2 (seconds)
-Relocalization.LostTimeout: 30.0
+Relocalization.LostTimeout: 5.0
 
 # Frame skip for relocalization attempts (both DBoW2 and LSH)
 # 5 = try every 5th frame to reduce computation

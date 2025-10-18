@@ -183,7 +183,7 @@ namespace Relocalization
           mStateAtomic(COMPLETELY_LOST),
           mHaveLastKnownPosition(false),
           mLostDuration(0.0),
-          mLostTimeout(30.0), // 30 seconds
+          mLostTimeout(5.0),
           mStopThreads(false),
           mLSHFoundPosition(false),
           mVisOdomRunning(false),
@@ -195,7 +195,8 @@ namespace Relocalization
           mLSHNumTables(11),
           mLSHNumBits(14),
           mLSHHammingThreshold(50),
-          mPROSACMaxIterations(100)
+          mPROSACMaxIterations(100),
+          mTimeoutReached(false)
     {
         // Load configuration
         if (!loadConfig())
@@ -488,7 +489,7 @@ namespace Relocalization
         mMinMatches = fs["Relocalization.MinMatches"].empty() ? 10 : (int)fs["Relocalization.MinMatches"];
         mBowThreshold = fs["Relocalization.BowSimilarityThreshold"].empty() ? 0.05f : (float)fs["Relocalization.BowSimilarityThreshold"];
         mMaxCandidates = fs["Relocalization.MaxCandidates"].empty() ? 5 : (int)fs["Relocalization.MaxCandidates"];
-
+        mLostTimeout = fs["Relocalization.LostTimeout"].empty() ? 5 : (int)fs["Relocalization.LostTimeout"];
         // Visualization settings (with defaults)
         mVisualizationEnabled = fs["Visualization.Enabled"].empty() ? true : (int)fs["Visualization.Enabled"] != 0;
         mExportPCD = fs["Visualization.ExportPCD"].empty() ? true : (int)fs["Visualization.ExportPCD"] != 0;
@@ -760,7 +761,7 @@ namespace Relocalization
                                           rvec, tvec, false, 300, 8.0, 0.9,
                                           inliersMask, cv::SOLVEPNP_EPNP);
 
-        if (!success)
+        if (!success || inliersMask.empty())
         {
             std::cout << "Failed solve PnP with RANSAC" << std::endl;
             return false;
@@ -768,17 +769,29 @@ namespace Relocalization
 
         // Count inliers
         inliers.clear();
-        int numInliers = cv::countNonZero(inliersMask);
-        std::cout << "[DEBUG] Total Inliers size: " << numInliers << std::endl;
-        // for (int i = 0; i < inliersMask.rows; i++)
-        // {
-        //     if (inliersMask.at<uchar>(i))
-        //     {
-        //         inliers.push_back(i);
-        //     }
-        // }
+        if (inliersMask.rows == (int)points3D.size())
+        {
+            // Dense mask: each row is 0 or 1
+            for (int i = 0; i < inliersMask.rows; i++)
+            {
+                if (inliersMask.at<uchar>(i, 0) != 0)
+                {
+                    inliers.push_back(i);
+                }
+            }
+        }
+        else
+        {
+            // Sparse mask: contains only inlier indices
+            for (int i = 0; i < inliersMask.rows; i++)
+            {
+                inliers.push_back(inliersMask.at<int>(i, 0));
+            }
+        }
 
-        // std::cout << "[DEBUG] Check Inliers size: " << inliers.size() << std::endl;
+        int numInliers = inliers.size();
+
+        std::cout << "[DEBUG] Check Inliers size: " << inliers.size() << std::endl;
 
         return numInliers >= (size_t)mMinInliers; // Use config value
     }
@@ -868,6 +881,12 @@ namespace Relocalization
         // Override visualize parameter with config setting
         visualize = mVisualizationEnabled;
 
+        if (visualize)
+        {
+            cv::namedWindow("Current Frame", cv::WINDOW_AUTOSIZE);
+            cv::namedWindow("Relocalization - Map Visualization", cv::WINDOW_AUTOSIZE);
+        }
+
         cv::Mat frame;
         int frameCount = 0;
         int successCount = 0;
@@ -879,44 +898,77 @@ namespace Relocalization
         {
             frameCount++;
 
-            // Process every Nth frame (from config)
             if (frameCount % mFrameSkip != 0)
+            {
+                // Still need to handle window events even when skipping
+                if (visualize)
+                {
+                    char key = cv::waitKey(1);
+                    if (key == 27) // ESC to quit
+                        break;
+                }
                 continue;
+            }
 
             std::cout << "\n--- Frame " << frameCount << " ---" << std::endl;
 
             auto result = processFrame(frame);
 
-            if (result.success)
+            if (visualize)
             {
-                successCount++;
-
-                if (visualize)
+                // Check if windows are still valid
+                try
                 {
                     visualizeLocation(result);
 
-                    // Show current frame with features
                     cv::Mat display = frame.clone();
-                    cv::putText(display, "LOCALIZED", cv::Point(30, 30),
-                                cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
+
+                    if (result.success)
+                    {
+                        cv::putText(display, "LOCALIZED", cv::Point(30, 30),
+                                    cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
+                        successCount++;
+                    }
+                    else
+                    {
+                        cv::putText(display, "TRACKING LOST", cv::Point(30, 30),
+                                    cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2);
+                    }
 
                     std::string posText = "Pos: [" +
                                           std::to_string(result.position.x) + ", " +
                                           std::to_string(result.position.y) + ", " +
                                           std::to_string(result.position.z) + "]";
                     cv::putText(display, posText, cv::Point(30, 70),
-                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
 
                     cv::imshow("Current Frame", display);
-                    cv::waitKey(10);
+
+                    char key = cv::waitKey(10);
+                    if (key == 27) // ESC
+                    {
+                        std::cout << "\nESC pressed, stopping..." << std::endl;
+                        break;
+                    }
+                }
+                catch (const cv::Exception &e)
+                {
+                    std::cerr << "\n[WARNING] OpenCV GUI error: " << e.what() << std::endl;
+                    std::cerr << "Continuing without visualization..." << std::endl;
+                    visualize = false; // Disable visualization to prevent further errors
                 }
             }
         }
 
+        if (visualize)
+        {
+            cv::destroyAllWindows();
+            cv::waitKey(1); // Let events process
+        }
+
         std::cout << "\n=== Video processing complete ===" << std::endl;
-        std::cout << "Total frames processed: " << frameCount / 5 << std::endl;
+        std::cout << "Total frames processed: " << frameCount / mFrameSkip << std::endl;
         std::cout << "Successful localizations: " << successCount << std::endl;
-        std::cout << "Success rate: " << (100.0 * successCount / (frameCount / 5)) << "%" << std::endl;
     }
 
     void RelocalizationModule::visualizeLocation(const LocationResult &result)
@@ -1131,7 +1183,27 @@ namespace Relocalization
     {
         std::cout << "[VISODOM] Thread started" << std::endl;
 
-        cv::Mat prevFrame;
+        while (mCurrentFrame.empty() && !mStopThreads.load())
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        if (mStopThreads.load())
+        {
+            std::cout << "[VISODOM] Stopped before initialization" << std::endl;
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mPositionMutex);
+            std::cout << "[VISODOM TEST] First frame: "
+                      << mCurrentFrame.cols << "x" << mCurrentFrame.rows
+                      << ", channels=" << mCurrentFrame.channels()
+                      << ", type=" << mCurrentFrame.type()
+                      << " (CV_8UC1=" << CV_8UC1 << ", CV_8UC3=" << CV_8UC3 << ")" << std::endl;
+        }
+
+        cv::Mat prevFrameGray;
         std::vector<cv::Point2f> prevPoints;
         int frameCounter = 0;
 
@@ -1147,16 +1219,65 @@ namespace Relocalization
                 currentFrame = mCurrentFrame.clone();
             }
 
-            if (prevFrame.empty())
+            // ✅ CRITICAL: Convert to grayscale
+            cv::Mat currentFrameGray;
+            try
+            {
+                if (currentFrame.channels() == 3)
+                {
+                    cv::cvtColor(currentFrame, currentFrameGray, cv::COLOR_BGR2GRAY);
+                }
+                else if (currentFrame.channels() == 1)
+                {
+                    currentFrameGray = currentFrame.clone();
+                }
+                else
+                {
+                    std::cerr << "[VISODOM ERROR] Unexpected frame channels: "
+                              << currentFrame.channels() << std::endl;
+                    continue;
+                }
+
+                // Verify the grayscale conversion worked
+                if (currentFrameGray.type() != CV_8UC1)
+                {
+                    std::cerr << "[VISODOM ERROR] Frame is not CV_8UC1, type="
+                              << currentFrameGray.type() << std::endl;
+                    continue;
+                }
+            }
+            catch (const cv::Exception &e)
+            {
+                std::cerr << "[VISODOM ERROR] cvtColor failed: " << e.what() << std::endl;
+                continue;
+            }
+
+            if (prevFrameGray.empty())
             {
                 // First frame - initialize
-                prevFrame = currentFrame.clone();
+                prevFrameGray = currentFrameGray.clone();
 
-                // Detect features for tracking
-                std::vector<cv::KeyPoint> keypoints;
-                cv::goodFeaturesToTrack(currentFrame, prevPoints, 200, 0.01, 10);
+                try
+                {
+                    // Detect features for tracking (now using grayscale!)
+                    cv::goodFeaturesToTrack(currentFrameGray, prevPoints, 200, 0.01, 10);
 
-                std::cout << "[VISODOM] Initialized with " << prevPoints.size() << " points" << std::endl;
+                    std::cout << "[VISODOM] Initialized with " << prevPoints.size()
+                              << " points (frame type: " << currentFrameGray.type() << ")" << std::endl;
+                }
+                catch (const cv::Exception &e)
+                {
+                    std::cerr << "[VISODOM ERROR] goodFeaturesToTrack failed: "
+                              << e.what() << std::endl;
+                    prevFrameGray.release();
+                    continue;
+                }
+
+                if (prevPoints.empty())
+                {
+                    std::cerr << "[VISODOM ERROR] No features detected!" << std::endl;
+                    prevFrameGray.release();
+                }
                 continue;
             }
 
@@ -1165,16 +1286,26 @@ namespace Relocalization
             std::vector<uchar> status;
             std::vector<float> err;
 
-            cv::calcOpticalFlowPyrLK(
-                prevFrame, currentFrame,
-                prevPoints, currPoints,
-                status, err);
+            try
+            {
+                cv::calcOpticalFlowPyrLK(
+                    prevFrameGray, currentFrameGray, // Both grayscale!
+                    prevPoints, currPoints,
+                    status, err);
+            }
+            catch (const cv::Exception &e)
+            {
+                std::cerr << "[VISODOM ERROR] Optical flow failed: " << e.what() << std::endl;
+                prevPoints.clear();
+                prevFrameGray.release();
+                continue;
+            }
 
             // Filter good matches
             std::vector<cv::Point2f> goodPrev, goodCurr;
             for (size_t i = 0; i < status.size(); i++)
             {
-                if (status[i])
+                if (status[i] && i < prevPoints.size() && i < currPoints.size())
                 {
                     goodPrev.push_back(prevPoints[i]);
                     goodCurr.push_back(currPoints[i]);
@@ -1183,14 +1314,25 @@ namespace Relocalization
 
             if (goodPrev.size() < 10)
             {
-                std::cout << "[VISODOM] Too few tracked points, re-detecting..." << std::endl;
-                cv::goodFeaturesToTrack(currentFrame, prevPoints, 200, 0.01, 10);
-                prevFrame = currentFrame.clone();
+                std::cout << "[VISODOM] Too few tracked points (" << goodPrev.size()
+                          << "), re-detecting..." << std::endl;
+
+                try
+                {
+                    prevPoints.clear();
+                    cv::goodFeaturesToTrack(currentFrameGray, prevPoints, 200, 0.01, 10);
+                    prevFrameGray = currentFrameGray.clone();
+                }
+                catch (const cv::Exception &e)
+                {
+                    std::cerr << "[VISODOM ERROR] Feature re-detection failed: "
+                              << e.what() << std::endl;
+                    prevFrameGray.release();
+                }
                 continue;
             }
 
-            // Estimate motion (simple 2D translation for now)
-            // In real system, you'd use essential matrix and decompose to R,t
+            // Estimate motion (simple 2D translation)
             cv::Point2f motion(0, 0);
             for (size_t i = 0; i < goodPrev.size(); i++)
             {
@@ -1200,11 +1342,10 @@ namespace Relocalization
             motion.x /= goodPrev.size();
             motion.y /= goodPrev.size();
 
-            // Convert pixel motion to world motion (very rough estimate)
-            // Assume ~0.001 meters per pixel (depends on camera distance)
+            // Convert pixel motion to world motion (rough estimate)
             float scale = 0.001f;
             float dx = motion.x * scale;
-            float dz = motion.y * scale; // Y in image is Z in world
+            float dz = motion.y * scale;
 
             // Update estimated position
             cv::Point3f estimatedPos;
@@ -1216,7 +1357,7 @@ namespace Relocalization
                 mVisOdomPosition = estimatedPos;
             }
 
-            if (frameCounter % 10 == 0) // Log every ~0.3 seconds
+            if (frameCounter % 10 == 0)
             {
                 std::cout << "[VISODOM] Estimate: [" << estimatedPos.x << ", "
                           << estimatedPos.y << ", " << estimatedPos.z << "]"
@@ -1225,15 +1366,15 @@ namespace Relocalization
 
             // Prepare for next iteration
             prevPoints = currPoints;
-            prevFrame = currentFrame.clone();
+            prevFrameGray = currentFrameGray.clone();
             frameCounter++;
 
             // Check timeout
             if (isTimeout())
             {
                 std::cout << "[VISODOM] Timeout reached!" << std::endl;
-                setState(COMPLETELY_LOST);
-                break;
+                mTimeoutReached.store(true); // ← Set flag instead of setState()
+                break;                       // Exit thread
             }
         }
 
@@ -1275,60 +1416,72 @@ namespace Relocalization
 
         while (!mStopThreads.load() && getState() == CURRENTLY_LOST)
         {
-            // Wait a bit between attempts
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             frameCounter++;
 
-            // Try LSH every 5 frames (same frequency as DBoW2)
             if (frameCounter % 5 != 0)
                 continue;
 
-            if (!mCurrentFrame.empty())
+            cv::Mat currentFrame;
+            {
+                std::lock_guard<std::mutex> lock(mPositionMutex);
+                if (mCurrentFrame.empty())
+                    continue;
+                currentFrame = mCurrentFrame.clone();
+            }
+
+            if (!currentFrame.empty())
             {
                 attemptCount++;
                 std::cout << "\n[LSH] Attempt #" << attemptCount << std::endl;
 
-                // Try to relocalize using LSH
-                LocationResult result = localRelocalizationLSH(mCurrentFrame);
-
-                if (result.success)
+                try
                 {
-                    std::cout << "[LSH] ✓ Position found!" << std::endl;
+                    LocationResult result = localRelocalizationLSH(currentFrame);
 
-                    // Update LSH position (thread-safe)
+                    if (result.success)
                     {
-                        std::lock_guard<std::mutex> lock(mPositionMutex);
-                        mLSHPosition = result.position;
+                        std::cout << "[LSH] ✓ Position found!" << std::endl;
+
+                        {
+                            std::lock_guard<std::mutex> lock(mPositionMutex);
+                            mLSHPosition = result.position;
+                        }
+
+                        mLSHFoundPosition.store(true);
+
+                        cv::Point3f smoothedPos = smoothPositionTransition(
+                            mVisOdomPosition,
+                            result.position,
+                            mSmoothingFactor);
+
+                        mCurrentPosition = smoothedPos;
+
+                        setState(FOUND_POSITION);
+                        break;
                     }
-
-                    // Signal that LSH found position
-                    mLSHFoundPosition.store(true);
-
-                    // Apply smooth position correction
-                    cv::Point3f smoothedPos = smoothPositionTransition(
-                        mVisOdomPosition,
-                        result.position,
-                        mSmoothingFactor);
-
-                    mCurrentPosition = smoothedPos;
-
-                    // Transition back to FOUND_POSITION
-                    setState(FOUND_POSITION);
-                    break;
+                    else
+                    {
+                        std::cout << "[LSH] ✗ No match found" << std::endl;
+                    }
                 }
-                else
+                catch (const cv::Exception &e)
                 {
-                    std::cout << "[LSH] ✗ No match found" << std::endl;
+                    std::cerr << "[LSH ERROR] Exception during relocalization: "
+                              << e.what() << std::endl;
+                }
+                catch (const std::exception &e)
+                {
+                    std::cerr << "[LSH ERROR] Standard exception: " << e.what() << std::endl;
                 }
             }
 
-            // Check timeout
             if (isTimeout())
             {
                 std::cout << "[LSH] Timeout reached! Giving up..." << std::endl;
-                setState(COMPLETELY_LOST);
-                break;
+                mTimeoutReached.store(true); // ← Set flag instead of setState()
+                break;                       // Exit thread
             }
         }
 
@@ -1387,6 +1540,11 @@ namespace Relocalization
         {
             std::lock_guard<std::mutex> lock(mPositionMutex);
             mCurrentFrame = frame.clone();
+
+            // Debug: verify frame type
+            std::cout << "[DEBUG] Stored frame: " << frame.cols << "x" << frame.rows
+                      << ", channels=" << frame.channels()
+                      << ", type=" << frame.type() << std::endl;
         }
 
         LocationResult result;
@@ -1423,7 +1581,7 @@ namespace Relocalization
             if (result.success)
             {
                 // Validate DBoW2 result (same validation as LSH!)
-                if (result.numInliers < 15)
+                if (result.numInliers < mMinInliers)
                 {
                     std::cout << "[REJECT] DBoW2: Too few inliers: "
                               << result.numInliers << std::endl;
@@ -1538,6 +1696,16 @@ namespace Relocalization
             std::cout << "[METHOD] Parallel VisOdom + LSH recovery" << std::endl;
             std::cout << "[INFO] Time lost: " << getTimeSinceLost() << "s / "
                       << mLostTimeout << "s" << std::endl;
+
+            if (mTimeoutReached.load())
+            {
+                std::cout << "[TIMEOUT] Parallel threads timed out, returning to COMPLETELY_LOST" << std::endl;
+                mTimeoutReached.store(false); // Reset flag
+                setState(COMPLETELY_LOST);    // Now safe - called from main thread!
+                result.success = false;
+                result.position = mCurrentPosition;
+                break;
+            }
 
             // Check if LSH thread found position
             if (mLSHFoundPosition.load())
