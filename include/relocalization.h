@@ -61,6 +61,9 @@ namespace Relocalization
         cv::Mat mK;
         cv::Mat mDistCoef;
 
+        cv::Size mProcessSize;
+        cv::Size mDisplaySize;
+
         std::string mMapPath;
         std::string mVocabPath;
         std::string mConfigPath;

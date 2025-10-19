@@ -67,4 +67,10 @@ Viewer.ViewpointZ: -1.8
 Viewer.ViewpointF: 500.0
 
 Relocalization.BowSimilarityThreshold: 0.018
-Relocalization.MinInliers: 7
+Relocalization.MinInliers: 15
+
+# Visualization settings
+Visualization.ProcessWidth: 640
+Visualization.ProcessHeight: 480
+Visualization.DisplayWidth: 1280
+Visualization.DisplayHeight: 960

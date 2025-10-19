@@ -260,7 +260,7 @@ namespace Relocalization
             return false;
         }
 
-        // Map path (ORB-SLAM3 format)
+        // Map path
         fs["System.LoadAtlasFromFile"] >> mMapPath;
         if (mMapPath.empty())
         {
@@ -268,7 +268,7 @@ namespace Relocalization
             return false;
         }
 
-        // Camera parameters (ORB-SLAM3 format uses Camera1.*)
+        // Camera parameters
         float fx = fs["Camera1.fx"];
         float fy = fs["Camera1.fy"];
         float cx = fs["Camera1.cx"];
@@ -286,7 +286,7 @@ namespace Relocalization
         mK.at<float>(0, 2) = cx;
         mK.at<float>(1, 2) = cy;
 
-        // Distortion coefficients (OpenCV format: k1, k2, p1, p2, k3)
+        // Distortion coefficients
         mDistCoef = cv::Mat::zeros(5, 1, CV_32F);
         if (!fs["Camera1.k1"].empty())
             mDistCoef.at<float>(0) = fs["Camera1.k1"];
@@ -299,14 +299,22 @@ namespace Relocalization
         if (!fs["Camera1.k3"].empty())
             mDistCoef.at<float>(4) = fs["Camera1.k3"];
 
-        // Relocalization settings (with defaults)
+        // Relocalization settings
         mFrameSkip = fs["Relocalization.FrameSkip"].empty() ? 5 : (int)fs["Relocalization.FrameSkip"];
         mMinInliers = fs["Relocalization.MinInliers"].empty() ? 1 : (int)fs["Relocalization.MinInliers"];
         mMinMatches = fs["Relocalization.MinMatches"].empty() ? 10 : (int)fs["Relocalization.MinMatches"];
         mBowThreshold = fs["Relocalization.BowSimilarityThreshold"].empty() ? 0.05f : (float)fs["Relocalization.BowSimilarityThreshold"];
         mMaxCandidates = fs["Relocalization.MaxCandidates"].empty() ? 5 : (int)fs["Relocalization.MaxCandidates"];
 
-        // Visualization settings (with defaults)
+        int procW = fs["Visualization.ProcessWidth"].empty() ? 640 : (int)fs["Visualization.ProcessWidth"];
+        int procH = fs["Visualization.ProcessHeight"].empty() ? 480 : (int)fs["Visualization.ProcessHeight"];
+        mProcessSize = cv::Size(procW, procH);
+
+        int dispW = fs["Visualization.DisplayWidth"].empty() ? 1280 : (int)fs["Visualization.DisplayWidth"];
+        int dispH = fs["Visualization.DisplayHeight"].empty() ? 960 : (int)fs["Visualization.DisplayHeight"];
+        mDisplaySize = cv::Size(dispW, dispH);
+
+        // Visualization settings
         mVisualizationEnabled = fs["Visualization.Enabled"].empty() ? true : (int)fs["Visualization.Enabled"] != 0;
         mExportPCD = fs["Visualization.ExportPCD"].empty() ? true : (int)fs["Visualization.ExportPCD"] != 0;
         fs["Visualization.PCDPath"] >> mPCDPath;
@@ -319,6 +327,8 @@ namespace Relocalization
         std::cout << "  Map: " << mMapPath << std::endl;
         std::cout << "  Camera: fx=" << fx << ", fy=" << fy << ", cx=" << cx << ", cy=" << cy << std::endl;
         std::cout << "  Distortion: k1=" << mDistCoef.at<float>(0) << ", k2=" << mDistCoef.at<float>(1) << std::endl;
+        std::cout << "  Process size: " << mProcessSize << std::endl; // ⭐ NEW
+        std::cout << "  Display size: " << mDisplaySize << std::endl; // ⭐ NEW
 
         return true;
     }
@@ -618,6 +628,8 @@ namespace Relocalization
     LocationResult RelocalizationModule::processFrame(const cv::Mat &frame)
     {
         std::cout << "[DEBUG] Starting processFrame..." << std::endl;
+        std::cout << "[DEBUG] Input frame size: " << frame.cols << "×" << frame.rows << std::endl;
+
         LocationResult result;
         result.success = false;
         result.matchedKeyFrameId = -1;
@@ -626,10 +638,24 @@ namespace Relocalization
         result.confidence = 0.0f;
         result.bowScore = 0.0f;
 
+        // ⭐ CRITICAL: Resize frame to match map resolution
+        cv::Mat processFrame;
+        if (frame.size() != mProcessSize)
+        {
+            cv::resize(frame, processFrame, mProcessSize);
+            std::cout << "[DEBUG] Resized to process size: " << mProcessSize << std::endl;
+        }
+        else
+        {
+            processFrame = frame.clone();
+            std::cout << "[DEBUG] Frame already at process size" << std::endl;
+        }
+
+        // Extract features from the RESIZED frame
         std::cout << "[DEBUG] Extracting features..." << std::endl;
         std::vector<cv::KeyPoint> keypoints;
         cv::Mat descriptors;
-        extractFeatures(frame, keypoints, descriptors);
+        extractFeatures(processFrame, keypoints, descriptors);
 
         if (keypoints.empty())
         {
@@ -656,7 +682,7 @@ namespace Relocalization
                 std::cout << "Matched " << points3D.size() << " points with KF "
                           << pKF->mnId << std::endl;
 
-                // Calculate BoW score for this candidate
+                // Calculate BoW score
                 DBoW2::BowVector currentBowVec;
                 DBoW2::FeatureVector currentFeatVec;
                 std::vector<cv::Mat> vCurrentDesc;
@@ -674,14 +700,12 @@ namespace Relocalization
 
                 if (solvePnP(points3D, points2D, rvec, tvec, inliers))
                 {
-                    // Calculate confidence metrics
                     float inlierRatio = (float)inliers.size() / points3D.size();
                     float confidence = std::min(100.0f,
-                                                (inlierRatio * 60.0f) +                          // 60% weight on inlier ratio
-                                                    (bowScore * 40.0f * 100.0f) +                // 40% weight on BoW score
-                                                    (std::min(50, (int)inliers.size()) * 0.8f)); // Bonus for high inlier count
+                                                (inlierRatio * 60.0f) +
+                                                    (bowScore * 40.0f * 100.0f) +
+                                                    (std::min(50, (int)inliers.size()) * 0.8f));
 
-                    // Only accept if this is better than previous candidates
                     if (confidence > bestScore)
                     {
                         bestScore = confidence;
@@ -737,7 +761,12 @@ namespace Relocalization
         int frameCount = 0;
         int successCount = 0;
 
+        // ⭐ Calculate text scaling based on display size
+        float textScale = mDisplaySize.width / 640.0f;
+
         std::cout << "\n=== Processing video ===" << std::endl;
+        std::cout << "Process resolution: " << mProcessSize << std::endl;
+        std::cout << "Display resolution: " << mDisplaySize << std::endl;
 
         while (cap.read(frame))
         {
@@ -747,6 +776,7 @@ namespace Relocalization
 
             std::cout << "\n--- Frame " << frameCount << " ---" << std::endl;
 
+            // ⭐ processFrame() handles resizing internally
             auto result = processFrame(frame);
 
             if (result.success)
@@ -759,8 +789,9 @@ namespace Relocalization
                     {
                         visualizeLocation(result);
 
-                        // Enhanced visualization with confidence
-                        cv::Mat display = frame.clone();
+                        // ⭐ Create display frame at display resolution
+                        cv::Mat displayFrame;
+                        cv::resize(frame, displayFrame, mDisplaySize);
 
                         // Status text - color coded by confidence
                         cv::Scalar statusColor;
@@ -781,53 +812,73 @@ namespace Relocalization
                             status = "WEAK";
                         }
 
-                        cv::putText(display, "LOCALIZED - " + status,
-                                    cv::Point(30, 40),
-                                    cv::FONT_HERSHEY_SIMPLEX, 1.0, statusColor, 2);
+                        // ⭐ HALF THE SIZE - Scaled UI elements
+                        int baseX = (int)(30 * textScale);
+                        int baseY = (int)(40 * textScale);
+                        float fontSize = 0.5f * textScale;                 // ⭐ Was 1.0f, now 0.5f
+                        int thickness = std::max(1, (int)(1 * textScale)); // ⭐ Was 2, now 1
+
+                        cv::putText(displayFrame, "LOCALIZED - " + status,
+                                    cv::Point(baseX, baseY),
+                                    cv::FONT_HERSHEY_SIMPLEX, fontSize, statusColor, thickness);
 
                         // Position
                         std::ostringstream posStream;
                         posStream << std::fixed << std::setprecision(2);
                         posStream << "Pos: [" << result.position.x << ", "
                                   << result.position.y << ", " << result.position.z << "]";
-                        cv::putText(display, posStream.str(), cv::Point(30, 80),
-                                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 255), 2);
+                        cv::putText(displayFrame, posStream.str(),
+                                    cv::Point(baseX, (int)(80 * textScale)),
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale, // ⭐ Was 0.6f, now 0.3f
+                                    cv::Scalar(255, 255, 255), thickness);
 
                         // Confidence bar
-                        cv::rectangle(display, cv::Point(30, 100),
-                                      cv::Point(30 + (int)(result.confidence * 3), 130),
+                        int barY = (int)(100 * textScale);
+                        int barHeight = (int)(30 * textScale);
+                        int barWidth = (int)(300 * textScale);
+
+                        cv::rectangle(displayFrame,
+                                      cv::Point(baseX, barY),
+                                      cv::Point(baseX + (int)(result.confidence * barWidth / 100),
+                                                barY + barHeight),
                                       statusColor, -1);
-                        cv::rectangle(display, cv::Point(30, 100),
-                                      cv::Point(330, 130),
+                        cv::rectangle(displayFrame,
+                                      cv::Point(baseX, barY),
+                                      cv::Point(baseX + barWidth, barY + barHeight),
                                       cv::Scalar(255, 255, 255), 2);
 
                         std::ostringstream confStream;
                         confStream << std::fixed << std::setprecision(1);
                         confStream << "Confidence: " << result.confidence << "%";
-                        cv::putText(display, confStream.str(), cv::Point(30, 155),
-                                    cv::FONT_HERSHEY_SIMPLEX, 0.6, statusColor, 2);
+                        cv::putText(displayFrame, confStream.str(),
+                                    cv::Point(baseX, barY + barHeight + (int)(25 * textScale)),
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale, // ⭐ Was 0.6f, now 0.3f
+                                    statusColor, thickness);
 
                         // Inliers info
                         std::ostringstream inlierStream;
                         inlierStream << "Inliers: " << result.numInliers
                                      << "/" << result.totalMatches
                                      << " (" << (result.numInliers * 100 / result.totalMatches) << "%)";
-                        cv::putText(display, inlierStream.str(), cv::Point(30, 185),
-                                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 255), 2);
+                        cv::putText(displayFrame, inlierStream.str(),
+                                    cv::Point(baseX, barY + barHeight + (int)(55 * textScale)),
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale, // ⭐ Was 0.6f, now 0.3f
+                                    cv::Scalar(255, 255, 255), thickness);
 
                         // BoW score
                         std::ostringstream bowStream;
                         bowStream << std::fixed << std::setprecision(3);
                         bowStream << "BoW Score: " << result.bowScore;
-                        cv::putText(display, bowStream.str(), cv::Point(30, 215),
-                                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 255), 2);
+                        cv::putText(displayFrame, bowStream.str(),
+                                    cv::Point(baseX, barY + barHeight + (int)(85 * textScale)),
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale, // ⭐ Was 0.6f, now 0.3f
+                                    cv::Scalar(255, 255, 255), thickness);
 
-                        cv::imshow("Current Frame", display);
+                        cv::imshow("Current Frame", displayFrame);
 
-                        // Check if user pressed ESC
                         int key = cv::waitKey(1);
                         if (key == 27)
-                        { // ESC
+                        {
                             std::cout << "\nESC pressed - stopping visualization" << std::endl;
                             break;
                         }
