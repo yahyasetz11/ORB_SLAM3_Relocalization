@@ -587,15 +587,15 @@ namespace Relocalization
         inliers.clear();
         int numInliers = cv::countNonZero(inliersMask);
         std::cout << "[DEBUG] Total Inliers size: " << numInliers << std::endl;
-        // for (int i = 0; i < inliersMask.rows; i++)
-        // {
-        //     if (inliersMask.at<uchar>(i))
-        //     {
-        //         inliers.push_back(i);
-        //     }
-        // }
+        for (int i = 0; i < inliersMask.rows; i++)
+        {
+            if (inliersMask.at<uchar>(i))
+            {
+                inliers.push_back(i);
+            }
+        }
 
-        // std::cout << "[DEBUG] Check Inliers size: " << inliers.size() << std::endl;
+        std::cout << "[DEBUG] Check Inliers size: " << inliers.size() << std::endl;
 
         return numInliers >= (size_t)mMinInliers; // Use config value
     }
@@ -622,9 +622,11 @@ namespace Relocalization
         result.success = false;
         result.matchedKeyFrameId = -1;
         result.numInliers = 0;
+        result.totalMatches = 0;
+        result.confidence = 0.0f;
+        result.bowScore = 0.0f;
 
         std::cout << "[DEBUG] Extracting features..." << std::endl;
-        // Extract features from current frame
         std::vector<cv::KeyPoint> keypoints;
         cv::Mat descriptors;
         extractFeatures(frame, keypoints, descriptors);
@@ -637,13 +639,12 @@ namespace Relocalization
 
         std::cout << "Extracted " << keypoints.size() << " features" << std::endl;
 
-        std::cout << "[DEBUG] Finding candidate keyframes..." << std::endl;
         // Find candidate keyframes
         auto candidates = detectRelocalizationCandidates(descriptors);
         std::cout << "Found " << candidates.size() << " candidate keyframes" << std::endl;
 
-        std::cout << "[DEBUG] Matching with candidates..." << std::endl;
         // Try to match with each candidate
+        float bestScore = 0.0f;
         for (auto pKF : candidates)
         {
             std::cout << "[DEBUG] Checking keyframe " << pKF->mnId << std::endl;
@@ -655,30 +656,64 @@ namespace Relocalization
                 std::cout << "Matched " << points3D.size() << " points with KF "
                           << pKF->mnId << std::endl;
 
+                // Calculate BoW score for this candidate
+                DBoW2::BowVector currentBowVec;
+                DBoW2::FeatureVector currentFeatVec;
+                std::vector<cv::Mat> vCurrentDesc;
+                vCurrentDesc.reserve(descriptors.rows);
+                for (int i = 0; i < descriptors.rows; ++i)
+                {
+                    vCurrentDesc.push_back(descriptors.row(i).clone());
+                }
+                mpVocabulary->transform(vCurrentDesc, currentBowVec, currentFeatVec, 4);
+                float bowScore = mpVocabulary->score(currentBowVec, pKF->mBowVec);
+
                 // Solve PnP
                 cv::Mat rvec, tvec;
                 std::vector<int> inliers;
 
                 if (solvePnP(points3D, points2D, rvec, tvec, inliers))
                 {
-                    result.success = true;
-                    result.position = computePosition(rvec, tvec);
-                    result.matchedKeyFrameId = pKF->mnId;
-                    result.numInliers = inliers.size();
+                    // Calculate confidence metrics
+                    float inlierRatio = (float)inliers.size() / points3D.size();
+                    float confidence = std::min(100.0f,
+                                                (inlierRatio * 60.0f) +                          // 60% weight on inlier ratio
+                                                    (bowScore * 40.0f * 100.0f) +                // 40% weight on BoW score
+                                                    (std::min(50, (int)inliers.size()) * 0.8f)); // Bonus for high inlier count
 
-                    mCurrentPosition = result.position;
+                    // Only accept if this is better than previous candidates
+                    if (confidence > bestScore)
+                    {
+                        bestScore = confidence;
 
-                    std::cout << "✓ Relocalization successful!" << std::endl;
-                    std::cout << "  Position: [" << result.position.x << ", "
-                              << result.position.y << ", " << result.position.z << "]" << std::endl;
-                    std::cout << "  Inliers: " << result.numInliers << std::endl;
+                        result.success = true;
+                        result.position = computePosition(rvec, tvec);
+                        result.matchedKeyFrameId = pKF->mnId;
+                        result.numInliers = inliers.size();
+                        result.totalMatches = points3D.size();
+                        result.confidence = confidence;
+                        result.bowScore = bowScore;
 
-                    return result;
+                        mCurrentPosition = result.position;
+
+                        std::cout << "✓ Relocalization successful!" << std::endl;
+                        std::cout << "  Position: [" << result.position.x << ", "
+                                  << result.position.y << ", " << result.position.z << "]" << std::endl;
+                        std::cout << "  Inliers: " << result.numInliers
+                                  << " / " << result.totalMatches
+                                  << " (" << (inlierRatio * 100) << "%)" << std::endl;
+                        std::cout << "  BoW Score: " << bowScore << std::endl;
+                        std::cout << "  Confidence: " << result.confidence << "%" << std::endl;
+                    }
                 }
             }
         }
 
-        std::cout << "✗ Relocalization failed" << std::endl;
+        if (!result.success)
+        {
+            std::cout << "✗ Relocalization failed" << std::endl;
+        }
+
         return result;
     }
 
@@ -691,21 +726,22 @@ namespace Relocalization
             return;
         }
 
-        // Override visualize parameter with config setting
         visualize = mVisualizationEnabled;
+
+        if (!visualize)
+        {
+            std::cout << "[INFO] Visualization disabled - running in headless mode" << std::endl;
+        }
 
         cv::Mat frame;
         int frameCount = 0;
         int successCount = 0;
 
         std::cout << "\n=== Processing video ===" << std::endl;
-        std::cout << "Frame skip: every " << mFrameSkip << " frames" << std::endl;
 
         while (cap.read(frame))
         {
             frameCount++;
-
-            // Process every Nth frame (from config)
             if (frameCount % mFrameSkip != 0)
                 continue;
 
@@ -719,78 +755,147 @@ namespace Relocalization
 
                 if (visualize)
                 {
-                    visualizeLocation(result);
+                    try
+                    {
+                        visualizeLocation(result);
 
-                    // Show current frame with features
-                    cv::Mat display = frame.clone();
-                    cv::putText(display, "LOCALIZED", cv::Point(30, 30),
-                                cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
+                        // Enhanced visualization with confidence
+                        cv::Mat display = frame.clone();
 
-                    std::string posText = "Pos: [" +
-                                          std::to_string(result.position.x) + ", " +
-                                          std::to_string(result.position.y) + ", " +
-                                          std::to_string(result.position.z) + "]";
-                    cv::putText(display, posText, cv::Point(30, 70),
-                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+                        // Status text - color coded by confidence
+                        cv::Scalar statusColor;
+                        std::string status;
+                        if (result.confidence >= 70)
+                        {
+                            statusColor = cv::Scalar(0, 255, 0);
+                            status = "EXCELLENT";
+                        }
+                        else if (result.confidence >= 50)
+                        {
+                            statusColor = cv::Scalar(0, 200, 255);
+                            status = "GOOD";
+                        }
+                        else
+                        {
+                            statusColor = cv::Scalar(0, 165, 255);
+                            status = "WEAK";
+                        }
 
-                    cv::imshow("Current Frame", display);
-                    cv::waitKey(1);
+                        cv::putText(display, "LOCALIZED - " + status,
+                                    cv::Point(30, 40),
+                                    cv::FONT_HERSHEY_SIMPLEX, 1.0, statusColor, 2);
+
+                        // Position
+                        std::ostringstream posStream;
+                        posStream << std::fixed << std::setprecision(2);
+                        posStream << "Pos: [" << result.position.x << ", "
+                                  << result.position.y << ", " << result.position.z << "]";
+                        cv::putText(display, posStream.str(), cv::Point(30, 80),
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 255), 2);
+
+                        // Confidence bar
+                        cv::rectangle(display, cv::Point(30, 100),
+                                      cv::Point(30 + (int)(result.confidence * 3), 130),
+                                      statusColor, -1);
+                        cv::rectangle(display, cv::Point(30, 100),
+                                      cv::Point(330, 130),
+                                      cv::Scalar(255, 255, 255), 2);
+
+                        std::ostringstream confStream;
+                        confStream << std::fixed << std::setprecision(1);
+                        confStream << "Confidence: " << result.confidence << "%";
+                        cv::putText(display, confStream.str(), cv::Point(30, 155),
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.6, statusColor, 2);
+
+                        // Inliers info
+                        std::ostringstream inlierStream;
+                        inlierStream << "Inliers: " << result.numInliers
+                                     << "/" << result.totalMatches
+                                     << " (" << (result.numInliers * 100 / result.totalMatches) << "%)";
+                        cv::putText(display, inlierStream.str(), cv::Point(30, 185),
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 255), 2);
+
+                        // BoW score
+                        std::ostringstream bowStream;
+                        bowStream << std::fixed << std::setprecision(3);
+                        bowStream << "BoW Score: " << result.bowScore;
+                        cv::putText(display, bowStream.str(), cv::Point(30, 215),
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 255), 2);
+
+                        cv::imshow("Current Frame", display);
+
+                        // Check if user pressed ESC
+                        int key = cv::waitKey(1);
+                        if (key == 27)
+                        { // ESC
+                            std::cout << "\nESC pressed - stopping visualization" << std::endl;
+                            break;
+                        }
+                    }
+                    catch (const cv::Exception &e)
+                    {
+                        std::cerr << "\n[ERROR] Display error: " << e.what() << std::endl;
+                        std::cerr << "Disabling visualization and continuing..." << std::endl;
+                        mVisualizationEnabled = false;
+                        visualize = false;
+                    }
                 }
             }
         }
 
         std::cout << "\n=== Video processing complete ===" << std::endl;
-        std::cout << "Total frames processed: " << frameCount / 5 << std::endl;
-        std::cout << "Successful localizations: " << successCount << std::endl;
-        std::cout << "Success rate: " << (100.0 * successCount / (frameCount / 5)) << "%" << std::endl;
+        std::cout << "Success rate: " << (100.0 * successCount / (frameCount / mFrameSkip)) << "%" << std::endl;
     }
 
     void RelocalizationModule::visualizeLocation(const LocationResult &result)
     {
-        if (!result.success || mMapPointsViz.empty())
+        try
         {
-            return;
+            // Create a 2D top-down view of the map
+            cv::Mat mapViz(800, 800, CV_8UC3, cv::Scalar(255, 255, 255));
+
+            // Find map bounds for scaling
+            float minX = 1e10, maxX = -1e10, minZ = 1e10, maxZ = -1e10;
+            for (const auto &pt : mMapPointsViz)
+            {
+                minX = std::min(minX, pt.x);
+                maxX = std::max(maxX, pt.x);
+                minZ = std::min(minZ, pt.z);
+                maxZ = std::max(maxZ, pt.z);
+            }
+
+            float rangeX = maxX - minX;
+            float rangeZ = maxZ - minZ;
+            float scale = std::min(700.0f / rangeX, 700.0f / rangeZ);
+
+            // Draw map points
+            for (const auto &pt : mMapPointsViz)
+            {
+                int x = 50 + (int)((pt.x - minX) * scale);
+                int y = 750 - (int)((pt.z - minZ) * scale);
+                cv::circle(mapViz, cv::Point(x, y), 1, cv::Scalar(100, 100, 100), -1);
+            }
+
+            // Draw current position
+            int posX = 50 + (int)((mCurrentPosition.x - minX) * scale);
+            int posY = 750 - (int)((mCurrentPosition.z - minZ) * scale);
+            cv::circle(mapViz, cv::Point(posX, posY), 8, cv::Scalar(0, 0, 255), -1);
+            cv::circle(mapViz, cv::Point(posX, posY), 15, cv::Scalar(0, 255, 255), 2);
+
+            // Add text
+            cv::putText(mapViz, "YOU ARE HERE", cv::Point(posX + 20, posY),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
+
+            cv::putText(mapViz, "Map (Top-Down View)", cv::Point(20, 30),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 0), 2);
+
+            cv::imshow("Relocalization - Map Visualization", mapViz);
         }
-
-        // Create a 2D top-down view of the map
-        cv::Mat mapViz(800, 800, CV_8UC3, cv::Scalar(255, 255, 255));
-
-        // Find map bounds for scaling
-        float minX = 1e10, maxX = -1e10, minZ = 1e10, maxZ = -1e10;
-        for (const auto &pt : mMapPointsViz)
+        catch (const cv::Exception &e)
         {
-            minX = std::min(minX, pt.x);
-            maxX = std::max(maxX, pt.x);
-            minZ = std::min(minZ, pt.z);
-            maxZ = std::max(maxZ, pt.z);
+            std::cerr << "[WARNING] Could not display map visualization: " << e.what() << std::endl;
+            mVisualizationEnabled = false;
         }
-
-        float rangeX = maxX - minX;
-        float rangeZ = maxZ - minZ;
-        float scale = std::min(700.0f / rangeX, 700.0f / rangeZ);
-
-        // Draw map points
-        for (const auto &pt : mMapPointsViz)
-        {
-            int x = 50 + (int)((pt.x - minX) * scale);
-            int y = 750 - (int)((pt.z - minZ) * scale);
-            cv::circle(mapViz, cv::Point(x, y), 1, cv::Scalar(100, 100, 100), -1);
-        }
-
-        // Draw current position
-        int posX = 50 + (int)((mCurrentPosition.x - minX) * scale);
-        int posY = 750 - (int)((mCurrentPosition.z - minZ) * scale);
-        cv::circle(mapViz, cv::Point(posX, posY), 8, cv::Scalar(0, 0, 255), -1);
-        cv::circle(mapViz, cv::Point(posX, posY), 15, cv::Scalar(0, 255, 255), 2);
-
-        // Add text
-        cv::putText(mapViz, "YOU ARE HERE", cv::Point(posX + 20, posY),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
-
-        cv::putText(mapViz, "Map (Top-Down View)", cv::Point(20, 30),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 0), 2);
-
-        cv::imshow("Relocalization - Map Visualization", mapViz);
     }
 
     void RelocalizationModule::exportMapToPCD(const std::string &outputPath)

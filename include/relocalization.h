@@ -24,6 +24,9 @@ namespace Relocalization
         int matchedKeyFrameId;
         int numInliers;
         std::vector<cv::DMatch> matches;
+        int totalMatches;
+        float confidence;
+        float bowScore;
     };
 
     class RelocalizationModule
@@ -39,6 +42,10 @@ namespace Relocalization
         void visualizeLocation(const LocationResult &result);
         void exportMapToPCD(const std::string &outputPath);
         void debugStatus();
+        void setVisualizationEnabled(bool enabled)
+        {
+            mVisualizationEnabled = enabled;
+        }
 
     private:
         // Map data
