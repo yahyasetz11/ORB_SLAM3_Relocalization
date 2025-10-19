@@ -67,4 +67,4 @@ Viewer.ViewpointZ: -1.8
 Viewer.ViewpointF: 500.0
 
 Relocalization.BowSimilarityThreshold: 0.018
-Relocalization.MinInliers: 5
+Relocalization.MinInliers: 2

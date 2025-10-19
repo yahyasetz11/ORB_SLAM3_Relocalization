@@ -49,17 +49,12 @@ set(LIBS
 add_executable(slam_webcam_simple src/main_webcam_simple.cpp)
 add_executable(slam_realsense_simple src/main_realsense_simple.cpp)
 add_executable(main_mp4_mono src/main_mp4_mono.cpp)
-# add_executable(main_relocalization_mp4 src/main_relocalization_mp4.cpp)
 add_executable(relocalization src/main.cpp src/relocalization.cpp)
 add_executable(test_map src/test_map.cpp)
-add_executable(test src/test.cpp)
 
 target_link_libraries(slam_webcam_simple ${LIBS})
 target_link_libraries(slam_realsense_simple ${LIBS})
 target_link_libraries(main_mp4_mono ${LIBS})
-# target_link_libraries(main_relocalization_mp4 ${LIBS})
 target_link_libraries(relocalization ${LIBS})
 target_link_libraries(test_map ${LIBS})
-target_link_libraries(test ${LIBS})
-
 
