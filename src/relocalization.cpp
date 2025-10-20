@@ -327,8 +327,8 @@ namespace Relocalization
         std::cout << "  Map: " << mMapPath << std::endl;
         std::cout << "  Camera: fx=" << fx << ", fy=" << fy << ", cx=" << cx << ", cy=" << cy << std::endl;
         std::cout << "  Distortion: k1=" << mDistCoef.at<float>(0) << ", k2=" << mDistCoef.at<float>(1) << std::endl;
-        std::cout << "  Process size: " << mProcessSize << std::endl; // ⭐ NEW
-        std::cout << "  Display size: " << mDisplaySize << std::endl; // ⭐ NEW
+        std::cout << "  Process size: " << mProcessSize << std::endl; 
+        std::cout << "  Display size: " << mDisplaySize << std::endl;
 
         return true;
     }
@@ -815,8 +815,8 @@ namespace Relocalization
                         // ⭐ HALF THE SIZE - Scaled UI elements
                         int baseX = (int)(30 * textScale);
                         int baseY = (int)(40 * textScale);
-                        float fontSize = 0.5f * textScale;                 // ⭐ Was 1.0f, now 0.5f
-                        int thickness = std::max(1, (int)(1 * textScale)); // ⭐ Was 2, now 1
+                        float fontSize = 0.5f * textScale;                 
+                        int thickness = std::max(1, (int)(1 * textScale)); 
 
                         cv::putText(displayFrame, "LOCALIZED - " + status,
                                     cv::Point(baseX, baseY),
@@ -829,7 +829,7 @@ namespace Relocalization
                                   << result.position.y << ", " << result.position.z << "]";
                         cv::putText(displayFrame, posStream.str(),
                                     cv::Point(baseX, (int)(80 * textScale)),
-                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale, // ⭐ Was 0.6f, now 0.3f
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale, 
                                     cv::Scalar(255, 255, 255), thickness);
 
                         // Confidence bar
@@ -852,7 +852,7 @@ namespace Relocalization
                         confStream << "Confidence: " << result.confidence << "%";
                         cv::putText(displayFrame, confStream.str(),
                                     cv::Point(baseX, barY + barHeight + (int)(25 * textScale)),
-                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale, // ⭐ Was 0.6f, now 0.3f
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale,
                                     statusColor, thickness);
 
                         // Inliers info
@@ -862,7 +862,7 @@ namespace Relocalization
                                      << " (" << (result.numInliers * 100 / result.totalMatches) << "%)";
                         cv::putText(displayFrame, inlierStream.str(),
                                     cv::Point(baseX, barY + barHeight + (int)(55 * textScale)),
-                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale, // ⭐ Was 0.6f, now 0.3f
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale,
                                     cv::Scalar(255, 255, 255), thickness);
 
                         // BoW score
@@ -871,7 +871,7 @@ namespace Relocalization
                         bowStream << "BoW Score: " << result.bowScore;
                         cv::putText(displayFrame, bowStream.str(),
                                     cv::Point(baseX, barY + barHeight + (int)(85 * textScale)),
-                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale, // ⭐ Was 0.6f, now 0.3f
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.3f * textScale,
                                     cv::Scalar(255, 255, 255), thickness);
 
                         cv::imshow("Current Frame", displayFrame);
