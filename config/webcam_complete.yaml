@@ -74,3 +74,7 @@ Visualization.ProcessWidth: 640
 Visualization.ProcessHeight: 480
 Visualization.DisplayWidth: 640
 Visualization.DisplayHeight: 480
+
+Map.ZoomScale: 2.5
+Map.OffsetX: -100
+Map.OffsetY: 200

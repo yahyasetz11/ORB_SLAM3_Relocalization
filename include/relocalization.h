@@ -27,6 +27,12 @@ namespace Relocalization
         int totalMatches;
         float confidence;
         float bowScore;
+
+        // For visualization
+        std::vector<cv::KeyPoint> queryKeypoints;
+        std::vector<cv::Point2f> matched2DPoints;
+        std::vector<cv::Point3f> matched3DPoints;
+        std::vector<int> inlierIndices;
     };
 
     class RelocalizationModule
@@ -39,8 +45,6 @@ namespace Relocalization
         bool loadMap();
         LocationResult processFrame(const cv::Mat &frame);
         void processVideo(const std::string &videoPath, bool visualize = true);
-        void visualizeLocation(const LocationResult &result);
-        void exportMapToPCD(const std::string &outputPath);
         void debugStatus();
         void setVisualizationEnabled(bool enabled)
         {
@@ -80,6 +84,15 @@ namespace Relocalization
         std::vector<cv::Point3f> mMapPointsViz;
         cv::Point3f mCurrentPosition;
 
+        // For map scaling
+        float mMinX, mMaxX, mMinZ, mMaxZ;
+        float mScale;
+
+        // Map visualization parameters
+        float mMapZoomScale;
+        int mMapOffsetX;
+        int mMapOffsetY;
+
         bool loadConfig();
         void extractFeatures(const cv::Mat &frame,
                              std::vector<cv::KeyPoint> &keypoints,
@@ -96,6 +109,9 @@ namespace Relocalization
                       cv::Mat &rvec, cv::Mat &tvec,
                       std::vector<int> &inliers);
         cv::Point3f computePosition(const cv::Mat &rvec, const cv::Mat &tvec);
+        cv::Point2f project3DTo2D(const cv::Point3f &pt3D, int mapHeight);
+        cv::Mat createMapVisualization(const LocationResult &result, cv::Size targetSize);
+        void exportMapToPCD(const std::string &outputPath);
     };
 
 } // namespace Relocalization
