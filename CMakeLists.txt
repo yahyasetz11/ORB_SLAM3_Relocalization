@@ -48,7 +48,9 @@ set(LIBS
 # RealSense executable
 add_executable(slam_webcam_simple src/main_webcam_simple.cpp)
 add_executable(slam_realsense_simple src/main_realsense_simple.cpp)
+# Creating map for relocalization with monocular pre-recorded video
 add_executable(main_mp4_mono src/main_mp4_mono.cpp)
+# Relocalization test with monocular pre-recorded video
 add_executable(relocalization src/main.cpp src/relocalization.cpp)
 add_executable(test_map src/test_map.cpp)
 
