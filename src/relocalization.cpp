@@ -786,6 +786,149 @@ namespace Relocalization
                   << "%" << std::endl;
     }
 
+    void RelocalizationModule::processWebcam(int cameraId)
+    {
+        cv::VideoCapture cap(cameraId);
+        if (!cap.isOpened())
+        {
+            std::cerr << "Cannot open webcam device " << cameraId << std::endl;
+            return;
+        }
+
+        bool visualize = mVisualizationEnabled;
+        if (!visualize)
+        {
+            std::cout << "[INFO] Visualization disabled - running in headless mode" << std::endl;
+        }
+
+        cv::Mat frame;
+        int frameCount = 0;
+        int successCount = 0;
+
+        std::cout << "\n=== Processing webcam (device " << cameraId << ") ===" << std::endl;
+        std::cout << "Press ESC to stop" << std::endl;
+
+        while (true)
+        {
+            if (!cap.read(frame) || frame.empty())
+            {
+                std::cerr << "[WARNING] Failed to grab frame from webcam" << std::endl;
+                continue;
+            }
+
+            frameCount++;
+            if (frameCount % mFrameSkip != 0)
+                continue;
+
+            auto result = processFrame(frame);
+
+            if (result.success)
+                successCount++;
+
+            if (visualize)
+            {
+                try
+                {
+                    cv::Mat displayFrame;
+                    cv::resize(frame, displayFrame, mDisplaySize);
+
+                    if (result.success)
+                    {
+                        for (const auto &kp : result.queryKeypoints)
+                        {
+                            float scale = (float)mDisplaySize.width / mProcessSize.width;
+                            cv::Point2f scaledPt(kp.pt.x * scale, kp.pt.y * scale);
+                            cv::circle(displayFrame, scaledPt, 2, cv::Scalar(150, 150, 150), -1);
+                        }
+
+                        for (int inlierIdx : result.inlierIndices)
+                        {
+                            float scale = (float)mDisplaySize.width / mProcessSize.width;
+                            cv::Point2f scaledPt(result.matched2DPoints[inlierIdx].x * scale,
+                                                 result.matched2DPoints[inlierIdx].y * scale);
+                            cv::circle(displayFrame, scaledPt, 5, cv::Scalar(0, 255, 0), 2);
+                        }
+
+                        cv::Mat mapViz = createMapVisualization(result, mDisplaySize);
+                        cv::Mat combined(mDisplaySize.height, mDisplaySize.width * 2, CV_8UC3);
+                        displayFrame.copyTo(combined(cv::Rect(0, 0, mDisplaySize.width, mDisplaySize.height)));
+                        mapViz.copyTo(combined(cv::Rect(mDisplaySize.width, 0, mDisplaySize.width, mDisplaySize.height)));
+
+                        for (int inlierIdx : result.inlierIndices)
+                        {
+                            float scale = (float)mDisplaySize.width / mProcessSize.width;
+                            cv::Point2f pt2D(result.matched2DPoints[inlierIdx].x * scale,
+                                             result.matched2DPoints[inlierIdx].y * scale);
+                            cv::Point2f pt3DProj = project3DTo2D(result.matched3DPoints[inlierIdx], mDisplaySize.height);
+                            pt3DProj.x += mDisplaySize.width;
+                            cv::line(combined, pt2D, pt3DProj, cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+                        }
+
+                        cv::Scalar statusColor;
+                        std::string status;
+                        if (result.confidence >= 70)
+                        {
+                            statusColor = cv::Scalar(0, 255, 0);
+                            status = "EXCELLENT";
+                        }
+                        else if (result.confidence >= 50)
+                        {
+                            statusColor = cv::Scalar(0, 200, 255);
+                            status = "GOOD";
+                        }
+                        else
+                        {
+                            statusColor = cv::Scalar(0, 165, 255);
+                            status = "WEAK";
+                        }
+
+                        cv::putText(combined, "LOCALIZED - " + status,
+                                    cv::Point(30, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, statusColor, 2);
+
+                        std::ostringstream info;
+                        info << "Inliers: " << result.numInliers << "/" << result.totalMatches
+                             << " | Conf: " << std::fixed << std::setprecision(1)
+                             << result.confidence << "%";
+                        cv::putText(combined, info.str(),
+                                    cv::Point(30, 70), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255), 1);
+
+                        cv::imshow("Relocalization: Webcam + Map", combined);
+                    }
+                    else
+                    {
+                        cv::Mat mapViz = createMapVisualization(result, mDisplaySize);
+                        cv::Mat combined(mDisplaySize.height, mDisplaySize.width * 2, CV_8UC3);
+                        displayFrame.copyTo(combined(cv::Rect(0, 0, mDisplaySize.width, mDisplaySize.height)));
+                        mapViz.copyTo(combined(cv::Rect(mDisplaySize.width, 0, mDisplaySize.width, mDisplaySize.height)));
+
+                        cv::putText(combined, "SEARCHING...",
+                                    cv::Point(30, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 100, 255), 2);
+
+                        cv::imshow("Relocalization: Webcam + Map", combined);
+                    }
+
+                    int key = cv::waitKey(1);
+                    if (key == 27)
+                    {
+                        std::cout << "\nESC pressed - stopping" << std::endl;
+                        break;
+                    }
+                }
+                catch (const cv::Exception &e)
+                {
+                    std::cerr << "\n[ERROR] Display error: " << e.what() << std::endl;
+                    mVisualizationEnabled = false;
+                    visualize = false;
+                }
+            }
+        }
+
+        int processed = frameCount / mFrameSkip;
+        std::cout << "\n=== Webcam processing stopped ===" << std::endl;
+        if (processed > 0)
+            std::cout << "Success rate: " << (100.0 * successCount / processed) << "%" << std::endl;
+    }
+
     void RelocalizationModule::exportMapToPCD(const std::string &outputPath)
     {
         std::ofstream file(outputPath);

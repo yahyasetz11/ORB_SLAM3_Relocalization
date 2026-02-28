@@ -48,6 +48,7 @@ namespace Relocalization
         bool loadMap();
         LocationResult processFrame(const cv::Mat &frame);
         void processVideo(const std::string &videoPath, bool visualize = true);
+        void processWebcam(int cameraId = 0);
         void debugStatus();
         void setVisualizationEnabled(bool enabled)
         {

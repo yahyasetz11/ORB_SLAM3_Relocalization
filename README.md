@@ -83,7 +83,10 @@ First, ensure your config has the map path:
 System.LoadAtlasFromFile: "maps/indoor_map.osa"
 ```
 
-Then run:
+The relocalization module supports two input modes: **video file** or **live webcam**.
+
+#### Video Mode
+
 ```bash
 ./build/relocalization \
     ../ORB_SLAM3/Vocabulary/ORBvoc.txt \
@@ -91,12 +94,39 @@ Then run:
     validation_video.mp4
 ```
 
-**Headless mode (no visualization):**
+#### Webcam Mode
+
 ```bash
+# Default webcam (device 0)
+./build/relocalization \
+    ../ORB_SLAM3/Vocabulary/ORBvoc.txt \
+    config/webcam_complete.yaml \
+    --webcam
+
+# Specific webcam device
+./build/relocalization \
+    ../ORB_SLAM3/Vocabulary/ORBvoc.txt \
+    config/webcam_complete.yaml \
+    --webcam 1
+```
+
+Press `ESC` to stop webcam mode.
+
+#### Headless Mode (no visualization)
+
+```bash
+# Video
 ./build/relocalization \
     ../ORB_SLAM3/Vocabulary/ORBvoc.txt \
     config/webcam_complete.yaml \
     validation_video.mp4 \
+    --no-viz
+
+# Webcam
+./build/relocalization \
+    ../ORB_SLAM3/Vocabulary/ORBvoc.txt \
+    config/webcam_complete.yaml \
+    --webcam 0 \
     --no-viz
 ```
 

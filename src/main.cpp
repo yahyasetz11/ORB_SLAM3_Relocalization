@@ -9,27 +9,51 @@ int main(int argc, char **argv)
         std::cout << "=========================================" << std::endl;
         std::cout << " ORB-SLAM3 Relocalization Module" << std::endl;
         std::cout << "=========================================" << std::endl;
-        std::cout << "\nUsage: " << argv[0]
-                  << " <ORBvoc.txt> <config.yaml> <validation_video> [--no-viz]" << std::endl;
+        std::cout << "\nUsage:" << std::endl;
+        std::cout << "  Video:  " << argv[0] << " <ORBvoc.txt> <config.yaml> <video_path> [--no-viz]" << std::endl;
+        std::cout << "  Webcam: " << argv[0] << " <ORBvoc.txt> <config.yaml> --webcam [device_id] [--no-viz]" << std::endl;
         std::cout << "\nArguments:" << std::endl;
         std::cout << "  ORBvoc.txt        - Path to ORB vocabulary file" << std::endl;
         std::cout << "  config.yaml       - Path to configuration file" << std::endl;
-        std::cout << "  validation_video  - Path to validation video file" << std::endl;
-        std::cout << "  --no-viz         - (Optional) Disable visualization windows" << std::endl;
+        std::cout << "  video_path        - Path to video file" << std::endl;
+        std::cout << "  --webcam [id]     - Use webcam input (default device id: 0)" << std::endl;
+        std::cout << "  --no-viz          - (Optional) Disable visualization windows" << std::endl;
         return 1;
     }
 
     // Parse arguments
     std::string vocabPath = argv[1];
     std::string configPath = argv[2];
-    std::string videoPath = argv[3];
-
-    // Check if user wants to disable visualization
+    std::string videoPath;
+    bool useWebcam = false;
+    int webcamId = 0;
     bool enableVisualization = true;
-    if (argc > 4 && std::string(argv[4]) == "--no-viz")
+
+    // argv[3] is either a video path or --webcam
+    if (std::string(argv[3]) == "--webcam")
     {
-        enableVisualization = false;
-        std::cout << "[INFO] Visualization disabled via command line" << std::endl;
+        useWebcam = true;
+        int nextArg = 4;
+        // Check if next arg is a device id (numeric)
+        if (argc > nextArg && std::string(argv[nextArg]).find("--") == std::string::npos)
+        {
+            webcamId = std::stoi(argv[nextArg]);
+            nextArg++;
+        }
+        if (argc > nextArg && std::string(argv[nextArg]) == "--no-viz")
+        {
+            enableVisualization = false;
+            std::cout << "[INFO] Visualization disabled via command line" << std::endl;
+        }
+    }
+    else
+    {
+        videoPath = argv[3];
+        if (argc > 4 && std::string(argv[4]) == "--no-viz")
+        {
+            enableVisualization = false;
+            std::cout << "[INFO] Visualization disabled via command line" << std::endl;
+        }
     }
 
     // Auto-detect if display is available
@@ -48,7 +72,10 @@ int main(int argc, char **argv)
     std::cout << "\nConfiguration:" << std::endl;
     std::cout << "  Vocabulary: " << vocabPath << std::endl;
     std::cout << "  Config: " << configPath << std::endl;
-    std::cout << "  Video: " << videoPath << std::endl;
+    if (useWebcam)
+        std::cout << "  Input: Webcam (device " << webcamId << ")" << std::endl;
+    else
+        std::cout << "  Input: Video - " << videoPath << std::endl;
     std::cout << "  Visualization: " << (enableVisualization ? "ENABLED" : "DISABLED") << std::endl;
     std::cout << std::endl;
 
@@ -68,14 +95,23 @@ int main(int argc, char **argv)
 
     reloc.debugStatus();
 
-    // Process video
-    std::cout << "\nStep 2: Processing validation video..." << std::endl;
-    reloc.processVideo(videoPath);
+    // Process input
+    if (useWebcam)
+    {
+        std::cout << "\nStep 2: Processing webcam input..." << std::endl;
+        reloc.processWebcam(webcamId);
+    }
+    else
+    {
+        std::cout << "\nStep 2: Processing validation video..." << std::endl;
+        reloc.processVideo(videoPath);
+    }
 
     std::cout << "\n✓ Done!" << std::endl;
 
-    // Only wait for keypress if visualization is enabled
-    if (enableVisualization)
+    // Only wait for keypress if visualization is enabled (video mode only;
+    // webcam already blocks until ESC)
+    if (enableVisualization && !useWebcam)
     {
         std::cout << "\nPress any key to exit..." << std::endl;
         try
