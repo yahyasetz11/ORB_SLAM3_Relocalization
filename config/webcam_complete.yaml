@@ -50,6 +50,7 @@ ORBextractor.iniThFAST: 20
 ORBextractor.minThFAST: 7
 
 System.SaveAtlasToFile: "../../ORB_SLAM3_Relocalization/maps/map3"
+# Comment the line below if you want to build the new atlas from the map created by the SLAM system. If you uncomment it, the atlas will be loaded from the file specified in the line below.
 System.LoadAtlasFromFile: "../../ORB_SLAM3_Relocalization/maps/map"
 
 #--------------------------------------------------------------------------------------------
