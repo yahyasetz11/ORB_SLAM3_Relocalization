@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <iomanip>
 
+#define M_PI 3.14159265358979323846
+
 namespace Relocalization
 {
 
@@ -508,9 +510,13 @@ namespace Relocalization
                 {
                     float inlierRatio = (float)inliers.size() / points3D.size();
                     float confidence = std::min(100.0f,
-                                                (inlierRatio * 60.0f) +
-                                                    (bowScore * 40.0f * 100.0f) +
+                                                (inlierRatio * 100.0f) +
+                                                    (bowScore * 1200.0f) +
                                                     (std::min(50, (int)inliers.size()) * 0.8f));
+
+                    std::cout << "inlierRatio: " << inlierRatio << std::endl;
+                    std::cout << "BoW score: " << bowScore << std::endl;
+                    std::cout << "inlierSize: " << (int)inliers.size() << std::endl;
 
                     if (confidence > bestScore)
                     {
@@ -529,6 +535,9 @@ namespace Relocalization
                         result.matched3DPoints = points3D;
                         result.inlierIndices = inliers;
 
+                        result.rvec = rvec.clone();
+                        result.tvec = tvec.clone();
+
                         mCurrentPosition = result.position;
                     }
                 }
@@ -542,14 +551,17 @@ namespace Relocalization
     {
         cv::Mat mapViz(targetSize, CV_8UC3, cv::Scalar(255, 255, 255));
 
-        // Draw all map points (small gray dots)
+        // STEP 1: Draw grid and axes FIRST (bottom layer)
+        drawGrid(mapViz, targetSize.height);
+
+        // STEP 2: Draw all map points (small gray dots)
         for (const auto &pt : mMapPointsViz)
         {
             cv::Point2f pt2d = project3DTo2D(pt, targetSize.height);
             cv::circle(mapViz, pt2d, 1, cv::Scalar(180, 180, 180), -1);
         }
 
-        // Highlight matched 3D points (yellow)
+        // STEP 3: Highlight matched 3D points (yellow)
         if (result.success)
         {
             for (size_t i = 0; i < result.matched3DPoints.size(); i++)
@@ -573,19 +585,60 @@ namespace Relocalization
                 }
             }
 
-            // Draw current position (RED - on top layer)
+            // STEP 4: Draw current position with ORIENTED TRIANGLE
             cv::Point2f posPoint = project3DTo2D(mCurrentPosition, targetSize.height);
-            cv::circle(mapViz, posPoint, 10, cv::Scalar(0, 0, 255), -1);  // Red dot
-            cv::circle(mapViz, posPoint, 18, cv::Scalar(0, 255, 255), 3); // Yellow ring
 
-            // Text on top layer
-            cv::putText(mapViz, "YOU ARE HERE",
-                        cv::Point(posPoint.x + 25, posPoint.y),
+            // Calculate orientation angle from rvec
+            float yaw = 0.0f;
+            if (!result.rvec.empty())
+            {
+                cv::Mat R;
+                cv::Rodrigues(result.rvec, R);
+
+                // Extract yaw from rotation matrix (rotation around Y axis)
+                // For top-down view, we want rotation in XZ plane
+                yaw = std::atan2(R.at<double>(0, 2), R.at<double>(2, 2));
+
+                // Adjust for map orientation (Y-axis points up on screen, but we use Z)
+                yaw = -yaw - M_PI / 2;
+            }
+
+            // Draw oriented triangle (RED with yellow border)
+            drawOrientedTriangle(mapViz, posPoint, yaw, 15, cv::Scalar(0, 0, 255), -1);
+            drawOrientedTriangle(mapViz, posPoint, yaw, 15, cv::Scalar(0, 255, 255), 2);
+
+            // Label
+            cv::putText(mapViz, "YOU",
+                        cv::Point(posPoint.x + 22, posPoint.y - 5),
                         cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 255), 2);
+
+            // STEP 5: Display coordinates in top-right corner
+            std::ostringstream coordText;
+            coordText << "Position:";
+            cv::putText(mapViz, coordText.str(),
+                        cv::Point(targetSize.width - 180, 30),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 0), 2);
+
+            coordText.str("");
+            coordText << "X: " << std::fixed << std::setprecision(2) << mCurrentPosition.x;
+            cv::putText(mapViz, coordText.str(),
+                        cv::Point(targetSize.width - 180, 55),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+            coordText.str("");
+            coordText << "Y: " << std::fixed << std::setprecision(2) << mCurrentPosition.z;
+            cv::putText(mapViz, coordText.str(),
+                        cv::Point(targetSize.width - 180, 78),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 150, 0), 2);
+
+            // coordText.str("");
+            // coordText << "Z: " << std::fixed << std::setprecision(2) << mCurrentPosition.y;
+            // cv::putText(mapViz, coordText.str(),
+            //             cv::Point(targetSize.width - 180, 101),
+            //             cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 0, 0), 2);
         }
 
         // Title
-        cv::putText(mapViz, "Map (Top-Down View)",
+        cv::putText(mapViz, "Map (Top-Down View - X/Y Plane)",
                     cv::Point(20, 30),
                     cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 0), 2);
 
@@ -762,5 +815,152 @@ namespace Relocalization
         file.close();
         std::cout << "Map exported to " << outputPath << std::endl;
     }
+    void RelocalizationModule::drawOrientedTriangle(cv::Mat &img, const cv::Point2f &center,
+                                                    float angle, float size,
+                                                    const cv::Scalar &color, int thickness)
+    {
+        // Create triangle points (pointing upward initially)
+        std::vector<cv::Point2f> trianglePoints;                           // FIX: Added <cv::Point2f>
+        trianglePoints.push_back(cv::Point2f(size, 0));                    // Top point
+        trianglePoints.push_back(cv::Point2f(-size * 0.6f, size * 0.5f));  // Bottom left
+        trianglePoints.push_back(cv::Point2f(-size * 0.6f, -size * 0.5f)); // Bottom right
 
+        // Rotate and translate
+        float cosA = cos(angle);
+        float sinA = sin(angle);
+        std::vector<cv::Point> rotatedPoints; // FIX: Added <cv::Point>
+
+        for (const auto &pt : trianglePoints)
+        {
+            float x = pt.x * cosA - pt.y * sinA + center.x;
+            float y = pt.x * sinA + pt.y * cosA + center.y;
+            rotatedPoints.push_back(cv::Point((int)x, (int)y));
+        }
+
+        // Draw filled triangle
+        if (thickness == -1)
+        {
+            cv::fillConvexPoly(img, rotatedPoints, color);
+        }
+        else
+        {
+            for (size_t i = 0; i < rotatedPoints.size(); i++)
+            {
+                cv::line(img, rotatedPoints[i], rotatedPoints[(i + 1) % rotatedPoints.size()],
+                         color, thickness);
+            }
+        }
+    }
+
+    void RelocalizationModule::drawGrid(cv::Mat &img, int mapHeight)
+    {
+        float rangeX = mMaxX - mMinX;
+        float rangeZ = mMaxZ - mMinZ;
+
+        float marginX = 100.0f;
+        float marginY = 100.0f;
+        float availableWidth = mDisplaySize.width - 2 * marginX;
+        float availableHeight = mapHeight - 2 * marginY;
+
+        float baseScale = std::min(availableWidth / rangeX, availableHeight / rangeZ);
+        float scale = baseScale * mMapZoomScale;
+
+        float scaledWidth = rangeX * scale;
+        float scaledHeight = rangeZ * scale;
+        float offsetX = marginX + (availableWidth - scaledWidth) / 2 + mMapOffsetX;
+        float offsetY = marginY + (availableHeight - scaledHeight) / 2 + mMapOffsetY;
+
+        // Determine grid spacing (aim for ~10 grid lines)
+        float gridSpacingWorld = std::max(0.5f, std::ceil(std::max(rangeX, rangeZ) / 10.0f));
+
+        // Draw vertical grid lines (X axis)
+        float startX = std::floor(mMinX / gridSpacingWorld) * gridSpacingWorld;
+        for (float x = startX; x <= mMaxX; x += gridSpacingWorld)
+        {
+            int screenX = (int)(offsetX + (x - mMinX) * scale);
+
+            cv::Scalar lineColor;
+            int lineThickness;
+
+            if (std::abs(x) < 0.01f) // X = 0 axis
+            {
+                lineColor = cv::Scalar(0, 0, 255); // Red for X axis
+                lineThickness = 2;
+            }
+            else
+            {
+                lineColor = cv::Scalar(220, 220, 220); // Light gray for grid
+                lineThickness = 1;
+            }
+
+            cv::line(img,
+                     cv::Point(screenX, 0),
+                     cv::Point(screenX, mapHeight),
+                     lineColor, lineThickness);
+
+            // Label
+            if (std::abs(x) > 0.01f || x == startX)
+            {
+                std::ostringstream label;
+                label << std::fixed << std::setprecision(1) << x;
+                cv::putText(img, label.str(),
+                            cv::Point(screenX + 3, mapHeight - 10),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.3,
+                            cv::Scalar(100, 100, 100), 1);
+            }
+        }
+
+        // Draw horizontal grid lines (Z axis)
+        float startZ = std::floor(mMinZ / gridSpacingWorld) * gridSpacingWorld;
+        for (float z = startZ; z <= mMaxZ; z += gridSpacingWorld)
+        {
+            int screenY = (int)(mapHeight - offsetY - (z - mMinZ) * scale);
+
+            cv::Scalar lineColor;
+            int lineThickness;
+
+            if (std::abs(z) < 0.01f) // Z = 0 axis
+            {
+                lineColor = cv::Scalar(0, 255, 0); // Green for Z axis
+                lineThickness = 2;
+            }
+            else
+            {
+                lineColor = cv::Scalar(220, 220, 220); // Light gray for grid
+                lineThickness = 1;
+            }
+
+            cv::line(img,
+                     cv::Point(0, screenY),
+                     cv::Point(mDisplaySize.width, screenY),
+                     lineColor, lineThickness);
+
+            // Label
+            if (std::abs(z) > 0.01f || z == startZ)
+            {
+                std::ostringstream label;
+                label << std::fixed << std::setprecision(1) << z;
+                cv::putText(img, label.str(),
+                            cv::Point(5, screenY - 3),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.3,
+                            cv::Scalar(100, 100, 100), 1);
+            }
+        }
+
+        // Draw axis labels
+        cv::putText(img, "X",
+                    cv::Point(mDisplaySize.width - 25, mapHeight - 10),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
+
+        cv::putText(img, "Y",
+                    cv::Point(10, 25),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
+
+        // Draw origin marker
+        cv::Point2f origin = project3DTo2D(cv::Point3f(0, 0, 0), mapHeight);
+        cv::circle(img, origin, 8, cv::Scalar(255, 0, 0), 2); // Blue circle
+        cv::putText(img, "Origin",
+                    cv::Point(origin.x + 12, origin.y - 5),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 0, 0), 1);
+    }
 } // namespace Relocalization

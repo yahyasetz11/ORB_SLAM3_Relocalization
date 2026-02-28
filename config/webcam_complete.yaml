@@ -49,7 +49,7 @@ ORBextractor.nLevels: 8
 ORBextractor.iniThFAST: 20
 ORBextractor.minThFAST: 7
 
-System.SaveAtlasToFile: "../../ORB_SLAM3_Relocalization/maps/map1"
+System.SaveAtlasToFile: "../../ORB_SLAM3_Relocalization/maps/map3"
 System.LoadAtlasFromFile: "../../ORB_SLAM3_Relocalization/maps/map"
 
 #--------------------------------------------------------------------------------------------
@@ -78,3 +78,7 @@ Visualization.DisplayHeight: 480
 Map.ZoomScale: 2.5
 Map.OffsetX: -100
 Map.OffsetY: 200
+
+# Map.ZoomScale: 10
+# Map.OffsetX: 300
+# Map.OffsetY: 500

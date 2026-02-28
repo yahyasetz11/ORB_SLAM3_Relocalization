@@ -61,6 +61,10 @@ int main(int argc, char **argv)
         if (frame.empty())
         {
             cout << "End of video reached." << endl;
+            std::cout << "Saving map..." << std::endl;
+            SLAM->Shutdown();
+            std::cout << "Cleanup completed. Exiting..." << std::endl;
+            exit(0);
             break;
         }
 

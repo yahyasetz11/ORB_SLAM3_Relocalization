@@ -33,6 +33,9 @@ namespace Relocalization
         std::vector<cv::Point2f> matched2DPoints;
         std::vector<cv::Point3f> matched3DPoints;
         std::vector<int> inlierIndices;
+
+        cv::Mat rvec;
+        cv::Mat tvec;
     };
 
     class RelocalizationModule
@@ -112,6 +115,11 @@ namespace Relocalization
         cv::Point2f project3DTo2D(const cv::Point3f &pt3D, int mapHeight);
         cv::Mat createMapVisualization(const LocationResult &result, cv::Size targetSize);
         void exportMapToPCD(const std::string &outputPath);
+
+        void drawOrientedTriangle(cv::Mat &img, const cv::Point2f &center,
+                                  float angle, float size,
+                                  const cv::Scalar &color, int thickness = -1);
+        void drawGrid(cv::Mat &img, int mapHeight);
     };
 
 } // namespace Relocalization
