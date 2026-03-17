@@ -2,6 +2,7 @@ build/
 log/
 install/
 .vscode/
+.claude
 data/
 maps/
 error.txt

@@ -130,6 +130,97 @@ Press `ESC` to stop webcam mode.
     --no-viz
 ```
 
+## ROS2 Humble Nodes
+
+### Prerequisites
+
+- ROS2 Humble installed and sourced
+- A colcon workspace
+
+### Build
+
+```bash
+cd ~/your_ws
+colcon build --symlink-install --packages-select orb_slam3_relocalization
+source install/setup.bash
+```
+
+### 1. Create Map Node
+
+Runs ORB-SLAM3 monocular SLAM and saves the map to a `.osa` file.
+
+#### From video file (default)
+
+```bash
+ros2 launch orb_slam3_relocalization map_creator.launch.py
+```
+
+#### From webcam (stream mode)
+
+```bash
+ros2 launch orb_slam3_relocalization map_creator.launch.py mode:=stream
+```
+
+Press `Ctrl+C` to stop and save the map.
+
+#### Change input paths or camera
+
+Edit `config/map_creator_params.yaml`:
+
+```yaml
+map_creator_node:
+  ros__parameters:
+    vocab_path:  "./../ORB_SLAM3/Vocabulary/ORBvoc.txt"
+    config_path: "./config/webcam_complete.yaml"
+    video_path:  "./data/your_video.mp4"   # path to MP4 (used in video mode)
+    camera_id:   0                          # webcam device index (used in stream mode)
+```
+
+### 2. Relocalization Node
+
+Loads a pre-built map and publishes estimated pose on `/relocalization/pose`.
+
+First, ensure your config has the map path:
+```yaml
+System.LoadAtlasFromFile: "maps/indoor_map.osa"
+```
+
+#### From video file (default)
+
+```bash
+ros2 launch orb_slam3_relocalization relocalization.launch.py
+```
+
+#### From webcam (stream mode)
+
+```bash
+ros2 launch orb_slam3_relocalization relocalization.launch.py mode:=stream
+```
+
+Press `ESC` in the visualization window or `Ctrl+C` to stop.
+
+#### Change input paths or camera
+
+Edit `config/relocalization_params.yaml`:
+
+```yaml
+relocalization_node:
+  ros__parameters:
+    vocab_path:  "./../ORB_SLAM3/Vocabulary/ORBvoc.txt"
+    config_path: "./config/webcam_complete.yaml"
+    video_path:  "./data/your_video.mp4"   # path to MP4 (used in video mode)
+    camera_id:   0                          # webcam device index (used in stream mode)
+    visualize:   true                       # set false to disable OpenCV window
+```
+
+#### Monitor published pose
+
+```bash
+ros2 topic echo /relocalization/pose
+```
+
+---
+
 ## Configuration Tips
 
 - **Creating map**: Use `System.SaveAtlasToFile` in config

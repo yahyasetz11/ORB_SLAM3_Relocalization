@@ -50,10 +50,12 @@ namespace Relocalization
         void processVideo(const std::string &videoPath, bool visualize = true);
         void processWebcam(int cameraId = 0);
         void debugStatus();
-        void setVisualizationEnabled(bool enabled)
-        {
-            mVisualizationEnabled = enabled;
-        }
+        void setVisualizationEnabled(bool enabled) { mVisualizationEnabled = enabled; }
+        cv::Size getDisplaySize() const { return mDisplaySize; }
+        cv::Size getProcessSize() const { return mProcessSize; }
+
+        cv::Mat createMapVisualization(const LocationResult &result, cv::Size targetSize);
+        cv::Point2f project3DTo2D(const cv::Point3f &pt3D, int mapHeight);
 
     private:
         // Map data
@@ -113,8 +115,6 @@ namespace Relocalization
                       cv::Mat &rvec, cv::Mat &tvec,
                       std::vector<int> &inliers);
         cv::Point3f computePosition(const cv::Mat &rvec, const cv::Mat &tvec);
-        cv::Point2f project3DTo2D(const cv::Point3f &pt3D, int mapHeight);
-        cv::Mat createMapVisualization(const LocationResult &result, cv::Size targetSize);
         void exportMapToPCD(const std::string &outputPath);
 
         void drawOrientedTriangle(cv::Mat &img, const cv::Point2f &center,

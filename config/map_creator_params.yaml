@@ -1,0 +1,6 @@
+map_creator_node:
+  ros__parameters:
+    vocab_path:  "./../ORB_SLAM3/Vocabulary/ORBvoc.txt"
+    config_path: "./config/webcam_complete.yaml"
+    video_path:  "./data/dataset1.mp4"
+    camera_id:   0
