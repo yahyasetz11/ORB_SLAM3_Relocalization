@@ -1,4 +1,5 @@
 import cv2
+import os
 import rclpy
 import time
 import json
@@ -12,8 +13,9 @@ from sensor_msgs.msg import Image
 class BBOX_Coords(Node):
     def __init__(self):
         super().__init__('minimal_publisher')
-        # Model init
-        self.model_path = "/home/orange/VSLAMxYOLO/src/yolo_bbox/yolo_bbox/model/yolov8n-oiv7"
+        # Model init — realpath resolves symlink from install/ back to source
+        pkg_dir = os.path.dirname(os.path.realpath(__file__))
+        self.model_path = os.path.join(pkg_dir, "model", "yolov8n-oiv7")
         self.model = YOLO(self.model_path)
         self.conf_value = 0.5
         

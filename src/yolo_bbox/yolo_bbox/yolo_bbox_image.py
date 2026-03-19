@@ -14,16 +14,20 @@ from sensor_msgs.msg import Image
 class BBOX_Coords(Node):
     def __init__(self):
         super().__init__('minimal_publisher')
-        self.model_path = "/home/orange/VSLAMxYOLO/src/yolo_bbox/yolo_bbox/model/yolov8n-oiv7"
+        # Model init — realpath resolves symlink from install/ back to source
+        pkg_dir = os.path.dirname(os.path.realpath(__file__))
+        ws_root = os.path.normpath(os.path.join(pkg_dir, '..', '..', '..'))
+        self.model_path = os.path.join(pkg_dir, "model", "yolov8n-oiv7")
 
         # Model init
         self.model = YOLO(self.model_path)
         self.conf_value = 0.2
-        
-        # Image settings
+
+        # Image settings — data lives at workspace root /data/
         self.image_paths = sorted(
-            glob.glob("/home/orange/VSLAMxYOLO/src/yolo_bbox/yolo_bbox/data/image12.jpg")
+            glob.glob(os.path.join(ws_root, "data", "image12.jpg"))
         )
+        print("Found images:", self.image_paths)
         if len(self.image_paths) == 0:
             self.get_logger().info("No images found")
             raise RuntimeError("No images in folder")

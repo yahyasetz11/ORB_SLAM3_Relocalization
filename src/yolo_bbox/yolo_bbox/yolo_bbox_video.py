@@ -1,4 +1,5 @@
 import cv2
+import os
 import rclpy
 import time
 import json
@@ -12,13 +13,15 @@ from sensor_msgs.msg import Image
 class BBOX_Coords(Node):
     def __init__(self):
         super().__init__('minimal_publisher')
-        # Model init
-        self.model_path = "/home/orange/VSLAMxYOLO/src/yolo_bbox/yolo_bbox/model/yolov8n-oiv7"
+        # Model init — realpath resolves symlink from install/ back to source
+        pkg_dir = os.path.dirname(os.path.realpath(__file__))
+        ws_root = os.path.normpath(os.path.join(pkg_dir, '..', '..', '..'))
+        self.model_path = os.path.join(pkg_dir, "model", "yolov8n-oiv7")
         self.model = YOLO(self.model_path)
         self.conf_value = 0.2
-        
-        # Video settings
-        self.cap = cv2.VideoCapture("/home/orange/VSLAMxYOLO/src/yolo_bbox/yolo_bbox/data/validation_back.mp4")
+
+        # Video settings — data lives at workspace root /data/
+        self.cap = cv2.VideoCapture(os.path.join(ws_root, "data", "validation_back.mp4"))
         if not self.cap.isOpened():
             self.get_logger().info("Cannot open video")
             raise RuntimeError("Unable to open video")
