@@ -1,11 +1,16 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <cv_bridge/cv_bridge.h>
 
 #include "relocalization.h"
 
+#include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
 #include <cmath>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 #include <cstdlib>  // getenv
 
@@ -62,14 +67,10 @@ public:
     {
         declare_parameter("vocab_path",  "");
         declare_parameter("config_path", "");
-        declare_parameter("video_path",  "");   // empty → use webcam
-        declare_parameter("camera_id",   0);
         declare_parameter("visualize",   true);
 
         vocab_path_  = get_parameter("vocab_path").as_string();
         config_path_ = get_parameter("config_path").as_string();
-        video_path_  = get_parameter("video_path").as_string();
-        camera_id_   = get_parameter("camera_id").as_int();
         visualize_   = get_parameter("visualize").as_bool();
 
         if (vocab_path_.empty() || config_path_.empty())
@@ -86,13 +87,19 @@ public:
 
         RCLCPP_INFO(get_logger(), "Vocabulary  : %s", vocab_path_.c_str());
         RCLCPP_INFO(get_logger(), "Config      : %s", config_path_.c_str());
-        RCLCPP_INFO(get_logger(), "Input       : %s",
-            video_path_.empty()
-                ? (std::string("webcam device ") + std::to_string(camera_id_)).c_str()
-                : video_path_.c_str());
         RCLCPP_INFO(get_logger(), "Visualize   : %s", visualize_ ? "yes" : "no");
 
         pose_pub_ = create_publisher<geometry_msgs::msg::Pose>("/relocalization/pose", 10);
+
+        image_sub_ = create_subscription<sensor_msgs::msg::Image>(
+            "/camera/image_raw", 10,
+            std::bind(&RelocalizationNode::imageCallback, this, std::placeholders::_1));
+        RCLCPP_INFO(get_logger(), "Subscribed to /camera/image_raw");
+
+        yolo_sub_ = create_subscription<std_msgs::msg::String>(
+            "yolo/results", 10,
+            std::bind(&RelocalizationNode::yoloCallback, this, std::placeholders::_1));
+        RCLCPP_INFO(get_logger(), "Subscribed to yolo/results");
 
         reloc_ = std::make_unique<Relocalization::RelocalizationModule>(vocab_path_, config_path_);
 
@@ -115,46 +122,66 @@ public:
             return;
         }
 
-        cv::VideoCapture cap;
-        if (video_path_.empty())
-            cap.open(camera_id_);
-        else
-            cap.open(video_path_);
-
-        if (!cap.isOpened())
-        {
-            RCLCPP_ERROR(get_logger(), "Cannot open input source.");
-            rclcpp::shutdown();
-            return;
-        }
-
         const cv::Size displaySize = reloc_->getDisplaySize();
         const cv::Size processSize = reloc_->getProcessSize();
         const float    kpScale     = (float)displaySize.width / processSize.width;
 
-        cv::Mat frame;
         int frame_count = 0;
 
-        RCLCPP_INFO(get_logger(), "Starting frame processing...");
+        RCLCPP_INFO(get_logger(), "Waiting for frames on /camera/image_raw ...");
 
         while (rclcpp::ok())
         {
-            // Let ROS2 process any pending callbacks (param updates, etc.)
+            // Process incoming callbacks (fills latest_frame_ via imageCallback)
             rclcpp::spin_some(shared_from_this());
 
-            if (!cap.read(frame) || frame.empty())
+            cv::Mat frame;
             {
-                if (video_path_.empty())
-                {
-                    RCLCPP_WARN(get_logger(), "Failed to grab webcam frame, retrying...");
+                std::lock_guard<std::mutex> lock(frame_mutex_);
+                if (!has_new_frame_)
                     continue;
-                }
-                RCLCPP_INFO(get_logger(), "End of video.");
-                break;
+                frame = latest_frame_.clone();
+                has_new_frame_ = false;
             }
 
             frame_count++;
             auto result = reloc_->processFrame(frame);
+
+            // ── Landmark keypoint segmentation ───────────────────────────────
+            // Scale YOLO bbox coords (640x480) → process resolution
+            {
+                const float sx = (float)processSize.width  / 640.0f;
+                const float sy = (float)processSize.height / 480.0f;
+
+                std::vector<LandmarkDetection> bboxes;
+                {
+                    std::lock_guard<std::mutex> lock(bbox_mutex_);
+                    bboxes = latest_bboxes_;
+                }
+
+                for (const auto &det : bboxes)
+                {
+                    Relocalization::LandmarkRegion region;
+                    region.cls_id = det.cls_id;
+                    region.bbox   = cv::Rect(
+                        (int)(det.bbox.x      * sx), (int)(det.bbox.y      * sy),
+                        (int)(det.bbox.width  * sx), (int)(det.bbox.height * sy));
+
+                    for (const auto &kp : result.queryKeypoints)
+                    {
+                        if (region.bbox.contains(cv::Point((int)kp.pt.x, (int)kp.pt.y)))
+                            region.keypoints.push_back(kp);
+                    }
+
+                    RCLCPP_INFO(get_logger(),
+                        "Landmark cls=%d: %zu keypoints in bbox [%d,%d,%dx%d]",
+                        region.cls_id, region.keypoints.size(),
+                        region.bbox.x, region.bbox.y,
+                        region.bbox.width, region.bbox.height);
+
+                    result.landmarkRegions.push_back(std::move(region));
+                }
+            }
 
             if (result.success)
             {
@@ -260,6 +287,50 @@ public:
     }
 
 private:
+    struct LandmarkDetection
+    {
+        int cls_id;
+        cv::Rect bbox;   // in YOLO resolution (640x480)
+    };
+
+    void imageCallback(const sensor_msgs::msg::Image::SharedPtr msg)
+    {
+        try
+        {
+            auto cv_img = cv_bridge::toCvCopy(msg, "bgr8");
+            std::lock_guard<std::mutex> lock(frame_mutex_);
+            latest_frame_  = cv_img->image;
+            has_new_frame_ = true;
+        }
+        catch (const cv_bridge::Exception &e)
+        {
+            RCLCPP_WARN(get_logger(), "cv_bridge error: %s", e.what());
+        }
+    }
+
+    void yoloCallback(const std_msgs::msg::String::SharedPtr msg)
+    {
+        try
+        {
+            auto data = nlohmann::json::parse(msg->data);
+            std::lock_guard<std::mutex> lock(bbox_mutex_);
+            latest_bboxes_.clear();
+            for (const auto &det : data["detections"])
+            {
+                int x1 = det["bbox_coords"]["x1"].get<int>();
+                int y1 = det["bbox_coords"]["y1"].get<int>();
+                int x2 = det["bbox_coords"]["x2"].get<int>();
+                int y2 = det["bbox_coords"]["y2"].get<int>();
+                latest_bboxes_.push_back({det["cls_id"].get<int>(),
+                                          cv::Rect(x1, y1, x2 - x1, y2 - y1)});
+            }
+        }
+        catch (const nlohmann::json::exception &e)
+        {
+            RCLCPP_WARN(get_logger(), "Failed to parse yolo/results: %s", e.what());
+        }
+    }
+
     void publishPose(const Relocalization::LocationResult &result)
     {
         geometry_msgs::msg::Pose msg;
@@ -289,13 +360,22 @@ private:
 
     std::string vocab_path_;
     std::string config_path_;
-    std::string video_path_;
-    int         camera_id_;
     bool        visualize_;
     bool        ready_;
 
     std::unique_ptr<Relocalization::RelocalizationModule> reloc_;
-    rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pose_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr           pose_pub_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr         image_sub_;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr           yolo_sub_;
+
+    // Camera frame (populated by imageCallback)
+    cv::Mat    latest_frame_;
+    bool       has_new_frame_{false};
+    std::mutex frame_mutex_;
+
+    // YOLO bboxes (populated by yoloCallback)
+    std::vector<LandmarkDetection> latest_bboxes_;
+    std::mutex                     bbox_mutex_;
 };
 
 int main(int argc, char **argv)

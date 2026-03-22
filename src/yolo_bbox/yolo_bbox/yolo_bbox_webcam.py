@@ -19,33 +19,27 @@ class BBOX_Coords(Node):
         self.model = YOLO(self.model_path)
         self.conf_value = 0.5
         
-        # Camera settings
-        self.cap = cv2.VideoCapture(0)
-        if not self.cap.isOpened():
-            self.get_logger().info("Cannot open webcam")
-            raise RuntimeError("Unable to open webcam")
-        
         self.results = self.create_publisher(String, 'yolo/results', 10)
-
-        self.frame_id = 0 
-        
-        # self.img = self.create_subscription(Image, )
-
         self.bbox_coords = self.create_publisher(Int32MultiArray, 'bbox_coords', 10)
 
-        self.timer = self.create_timer(0.2, self.detection_callback)
-        
+        self.bridge = CvBridge()
+        self.latest_frame = None
+        self.img_sub = self.create_subscription(
+            Image, '/camera/image_raw', self.image_callback, 10)
+
+        self.frame_id = 0
         self.DOOR_ID = 164
 
-        self.get_logger().info("Start YOLO Webcam Detection")
+        self.timer = self.create_timer(0.1, self.detection_callback)
+        self.get_logger().info("Start YOLO Webcam Detection — subscribed to /camera/image_raw")
+
+    def image_callback(self, msg):
+        self.latest_frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+
     def detection_callback(self):
-        ret, frame = self.cap.read()
-        if not ret or frame is None:
-            self.get_logger().warning("Fail to read frame from webcam")
+        if self.latest_frame is None:
             return
-        
-        # Resize the frame
-        frame = cv2.resize(frame, (640, 480))
+        frame = self.latest_frame.copy()
     
         detected = self.model.predict(frame, conf=self.conf_value, verbose=False)
         # results = self.model(frame)[0]
@@ -126,8 +120,6 @@ class BBOX_Coords(Node):
         
                 
     def destroy_node(self):
-        if hasattr(self, 'cap') and self.cap.isOpened():
-            self.cap.release()
         cv2.destroyAllWindows()
         super().destroy_node()
 

@@ -8,6 +8,10 @@ set(CMAKE_BUILD_TYPE Release)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 # ── Non-ROS dependencies ──────────────────────────────────────────────────────
 set(ORB_SLAM3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../ORB_SLAM3)
@@ -70,8 +74,8 @@ ament_target_dependencies(map_creator_node rclcpp geometry_msgs)
 
 # ── ROS2 node: relocalization_node ───────────────────────────────────────────
 add_executable(relocalization_node src/relocalization_node.cpp src/relocalization.cpp)
-target_link_libraries(relocalization_node ${LIBS})
-ament_target_dependencies(relocalization_node rclcpp geometry_msgs)
+target_link_libraries(relocalization_node ${LIBS} nlohmann_json::nlohmann_json)
+ament_target_dependencies(relocalization_node rclcpp geometry_msgs std_msgs sensor_msgs cv_bridge)
 
 # ── Install ROS2 targets ──────────────────────────────────────────────────────
 install(TARGETS

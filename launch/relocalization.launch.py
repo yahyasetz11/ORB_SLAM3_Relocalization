@@ -8,36 +8,46 @@ import os
 
 
 def generate_launch_description():
-    pkg_share = get_package_share_directory('orb_slam3_relocalization')
-    params_file = os.path.join(pkg_share, 'config', 'relocalization_params.yaml')
+    pkg_share    = get_package_share_directory('orb_slam3_relocalization')
+    reloc_params  = os.path.join(pkg_share, 'config', 'relocalization_params.yaml')
+    camera_params = os.path.join(pkg_share, 'config', 'camera_params.yaml')
 
-    mode = LaunchConfiguration('mode')
+    mode     = LaunchConfiguration('mode')
     is_video = PythonExpression(["'", mode, "' == 'video'"])
 
     return LaunchDescription([
         DeclareLaunchArgument(
             'mode',
             default_value='video',
-            description='Input mode: video (default) or stream (webcam)'
+            description='Camera source: video (default) or stream (webcam)'
         ),
 
-        # ── Video mode ────────────────────────────────────────────────────────
+        # ── camera_node: video mode ───────────────────────────────────────────
         Node(
-            package='orb_slam3_relocalization',
-            executable='relocalization_node',
-            name='relocalization_node',
+            package='yolo_bbox',
+            executable='camera_node',
+            name='camera_node',
             output='screen',
             condition=IfCondition(is_video),
-            parameters=[params_file],
+            parameters=[camera_params],
         ),
 
-        # ── Stream (webcam) mode — override video_path to empty ───────────────
+        # ── camera_node: stream (webcam) mode ────────────────────────────────
+        Node(
+            package='yolo_bbox',
+            executable='camera_node',
+            name='camera_node',
+            output='screen',
+            condition=UnlessCondition(is_video),
+            parameters=[camera_params, {'video_path': ''}],
+        ),
+
+        # ── relocalization_node ───────────────────────────────────────────────
         Node(
             package='orb_slam3_relocalization',
             executable='relocalization_node',
             name='relocalization_node',
             output='screen',
-            condition=UnlessCondition(is_video),
-            parameters=[params_file, {'video_path': ''}],
+            parameters=[reloc_params],
         ),
     ])

@@ -1,0 +1,4 @@
+camera_node:
+  ros__parameters:
+    video_path: "./data/dataset1.mp4"   # set to "" to use webcam
+    camera_id: 0                         # webcam device index (used when video_path is empty)

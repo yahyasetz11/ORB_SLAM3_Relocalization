@@ -15,48 +15,39 @@ class BBOX_Coords(Node):
         super().__init__('minimal_publisher')
         # Model init — realpath resolves symlink from install/ back to source
         pkg_dir = os.path.dirname(os.path.realpath(__file__))
-        ws_root = os.path.normpath(os.path.join(pkg_dir, '..', '..', '..'))
         self.model_path = os.path.join(pkg_dir, "model", "yolov8n-oiv7")
         self.model = YOLO(self.model_path)
         self.conf_value = 0.2
 
-        # Video settings — data lives at workspace root /data/
-        self.cap = cv2.VideoCapture(os.path.join(ws_root, "data", "validation_back.mp4"))
-        if not self.cap.isOpened():
-            self.get_logger().info("Cannot open video")
-            raise RuntimeError("Unable to open video")
-        
         self.results = self.create_publisher(String, 'yolo/results', 10)
-
-        self.frame_id = 0 
-        
-        # self.img = self.create_subscription(Image, )
-
         self.bbox_coords = self.create_publisher(Int32MultiArray, 'bbox_coords', 10)
 
-        self.timer = self.create_timer(0.3, self.detection_callback)
-        
+        self.bridge = CvBridge()
+        self.latest_frame = None
+        self.img_sub = self.create_subscription(
+            Image, '/camera/image_raw', self.image_callback, 10)
+
+        self.frame_id = 0
         self.DOOR_ID = 164
-        
         self.frame_skip = 3
-        
         self.json_path = "door_detections.jsonl"
         self.save_json = False
 
-        self.get_logger().info("Start YOLO Video Detection")
+        # Process at a slower rate than publish — YOLO is heavy
+        self.timer = self.create_timer(0.1, self.detection_callback)
+
+        self.get_logger().info("Start YOLO Video Detection — subscribed to /camera/image_raw")
+
+    def image_callback(self, msg):
+        self.latest_frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
 
     def detection_callback(self):
         if self.frame_id % self.frame_skip != 0:
             self.frame_id += 1
             return
-        ret, frame = self.cap.read()
-        if not ret or frame is None:
-            self.get_logger().info("End of video or failed to read frame")
-            rclpy.shutdown()
+        if self.latest_frame is None:
             return
-        
-        # Resize frame
-        frame = cv2.resize(frame, (640, 480))
+        frame = self.latest_frame.copy()
     
         detected = self.model.predict(frame, conf=self.conf_value, verbose=False)
         detections = []
@@ -138,8 +129,6 @@ class BBOX_Coords(Node):
             rclpy.shutdown()
                 
     def destroy_node(self):
-        if hasattr(self, 'cap') and self.cap.isOpened():
-            self.cap.release()
         cv2.destroyAllWindows()
         super().destroy_node()
 

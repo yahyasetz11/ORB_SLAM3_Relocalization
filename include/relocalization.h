@@ -17,6 +17,14 @@
 namespace Relocalization
 {
 
+    // Keypoints belonging to a single detected landmark region (e.g. door, pillar)
+    struct LandmarkRegion
+    {
+        int cls_id;                              // YOLO class id (e.g. 164 = door)
+        cv::Rect bbox;                           // bounding box in process resolution
+        std::vector<cv::KeyPoint> keypoints;     // all ORB keypoints inside this bbox
+    };
+
     struct LocationResult
     {
         bool success;
@@ -36,6 +44,9 @@ namespace Relocalization
 
         cv::Mat rvec;
         cv::Mat tvec;
+
+        // Keypoints segmented by landmark bounding boxes (populated by relocalization_node)
+        std::vector<LandmarkRegion> landmarkRegions;
     };
 
     class RelocalizationModule

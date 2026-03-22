@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'camera_node = yolo_bbox.camera_node:main',
             'bbox_reciever = yolo_bbox.bbox_reciever:main',
             'yolo_bbox_image = yolo_bbox.yolo_bbox_image:main',
             'yolo_bbox_video = yolo_bbox.yolo_bbox_video:main',
