@@ -14,7 +14,7 @@ find_package(cv_bridge REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 # ── Non-ROS dependencies ──────────────────────────────────────────────────────
-set(ORB_SLAM3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../ORB_SLAM3)
+set(ORB_SLAM3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../ORB_SLAM3)
 list(APPEND CMAKE_MODULE_PATH ${ORB_SLAM3_DIR}/cmake)
 
 find_package(OpenCV 4 REQUIRED)
