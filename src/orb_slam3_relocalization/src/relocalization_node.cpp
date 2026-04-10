@@ -9,10 +9,19 @@
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
 #include <cmath>
+#include <fstream>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
 #include <cstdlib>  // getenv
+
+static std::string expandPath(const std::string & path)
+{
+    if (path.empty() || path[0] != '~') return path;
+    const char * home = std::getenv("HOME");
+    if (!home) return path;
+    return std::string(home) + path.substr(1);
+}
 
 // Rodrigues rvec → quaternion (Shepperd's method)
 static void rvecToQuaternion(const cv::Mat &rvec,
@@ -69,8 +78,8 @@ public:
         declare_parameter("config_path", "");
         declare_parameter("visualize",   true);
 
-        vocab_path_  = get_parameter("vocab_path").as_string();
-        config_path_ = get_parameter("config_path").as_string();
+        vocab_path_  = expandPath(get_parameter("vocab_path").as_string());
+        config_path_ = expandPath(get_parameter("config_path").as_string());
         visualize_   = get_parameter("visualize").as_bool();
 
         if (vocab_path_.empty() || config_path_.empty())
@@ -110,6 +119,17 @@ public:
             return;
         }
         RCLCPP_INFO(get_logger(), "Map loaded.");
+
+        // CSV comparison log
+        csv_log_.open("comparison_log.csv");
+        if (csv_log_.is_open())
+        {
+            csv_log_ << "frame,std_inliers,std_total,std_reproj_px,"
+                     << "wpnp_inliers,wpnp_total,wpnp_reproj_px,wpnp_weighted_cost,"
+                     << "pose_delta_m,wpnp_iterations\n";
+            RCLCPP_INFO(get_logger(), "CSV log: comparison_log.csv");
+        }
+
         ready_ = true;
     }
 
@@ -180,6 +200,57 @@ public:
                         region.bbox.width, region.bbox.height);
 
                     result.landmarkRegions.push_back(std::move(region));
+                }
+            }
+
+            // ── Weighted PnP (only when landmarks are detected) ───────────────
+            if (!result.matched2DPoints.empty() && !result.matched3DPoints.empty()
+                && !result.landmarkRegions.empty())
+            {
+                std::vector<float> weights = reloc_->assignWeightsFromLandmarks(
+                    result.matched2DPoints, result.landmarkRegions, 1.0f, 0.3f);
+
+                Relocalization::WeightedPnPResult wpnp = reloc_->solvePnPWeighted(
+                    result.matched3DPoints, result.matched2DPoints, weights);
+
+                float std_reproj = result.success
+                    ? reloc_->computeMeanReprojError(
+                        result.matched3DPoints, result.matched2DPoints,
+                        result.rvec, result.tvec)
+                    : -1.0f;
+
+                if (wpnp.success)
+                {
+                    float dx = wpnp.position.x - result.position.x;
+                    float dy = wpnp.position.y - result.position.y;
+                    float dz = wpnp.position.z - result.position.z;
+                    float pose_delta = std::sqrt(dx*dx + dy*dy + dz*dz);
+
+                    RCLCPP_INFO(get_logger(),
+                        "[WeightedPnP] inliers=%d/%d  reproj=%.3fpx  "
+                        "[StandardPnP] inliers=%d/%d  reproj=%.3fpx  "
+                        "pose_delta=%.4fm  wpnp_iters=%d",
+                        wpnp.numInliers, wpnp.totalCorrespondences,
+                        wpnp.meanReprojectionError,
+                        result.numInliers, result.totalMatches,
+                        std_reproj, pose_delta, wpnp.iterations);
+
+                    if (csv_log_.is_open())
+                    {
+                        csv_log_ << frame_count << ","
+                                 << result.numInliers << "," << result.totalMatches << ","
+                                 << std::fixed << std::setprecision(4) << std_reproj << ","
+                                 << wpnp.numInliers << "," << wpnp.totalCorrespondences << ","
+                                 << wpnp.meanReprojectionError << ","
+                                 << wpnp.weightedReprojectionError << ","
+                                 << pose_delta << "," << wpnp.iterations << "\n";
+                        csv_log_.flush();
+                    }
+                }
+                else
+                {
+                    RCLCPP_WARN(get_logger(),
+                        "[WeightedPnP] failed — standard PnP result kept");
                 }
             }
 
@@ -376,6 +447,9 @@ private:
     // YOLO bboxes (populated by yoloCallback)
     std::vector<LandmarkDetection> latest_bboxes_;
     std::mutex                     bbox_mutex_;
+
+    // CSV comparison log
+    std::ofstream csv_log_;
 };
 
 int main(int argc, char **argv)

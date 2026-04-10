@@ -1,6 +1,11 @@
 map_creator_node:
   ros__parameters:
-    vocab_path:  "./../ORB_SLAM3/Vocabulary/ORBvoc.txt"
-    config_path: "./config/webcam_complete.yaml"
-    video_path:  "./data/dataset1.mp4"
-    camera_id:   0
+    vocab_path: "~/Documents/ORB_SLAM3/Vocabulary/ORBvoc.txt"
+    # for tum fr3, use the config file below. For webcam, use webcam_complete.yaml
+    config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/tum_fr3.yaml"
+    video_path: "~/Documents/ORB_SLAM3_Relocalization/data/tum/sitting_static.mp4"
+
+    # for webcam
+    # config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/webcam_complete.yaml"
+    # video_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/data/dataset1.mp4"
+    camera_id: 0

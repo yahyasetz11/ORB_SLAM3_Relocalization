@@ -9,7 +9,9 @@ import os
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('orb_slam3_relocalization')
-    params_file = os.path.join(pkg_share, 'config', 'map_creator_params.yaml')
+    print("Package share directory:", pkg_share)  # Debug print to verify path
+    params_file = os.path.join(pkg_share, '..', '..', '..', '..', 'src', 'orb_slam3_relocalization', 'config', 'map_creator_params.yaml')
+    print("Parameters file path:", params_file)  # Debug print to verify path
 
     mode = LaunchConfiguration('mode')
     is_video = PythonExpression(["'", mode, "' == 'video'"])

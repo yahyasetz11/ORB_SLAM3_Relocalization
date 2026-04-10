@@ -14,7 +14,8 @@ class CameraNode(Node):
         self.declare_parameter('video_path', '')   # empty = webcam
         self.declare_parameter('camera_id', 0)
 
-        video_path = self.get_parameter('video_path').get_parameter_value().string_value
+        video_path = os.path.expanduser(
+            self.get_parameter('video_path').get_parameter_value().string_value)
         camera_id  = self.get_parameter('camera_id').get_parameter_value().integer_value
 
         if video_path:

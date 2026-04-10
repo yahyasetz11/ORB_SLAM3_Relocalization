@@ -8,9 +8,8 @@ import os
 
 
 def generate_launch_description():
-    pkg_share    = get_package_share_directory('orb_slam3_relocalization')
-    reloc_params  = os.path.join(pkg_share, 'config', 'relocalization_params.yaml')
-    camera_params = os.path.join(pkg_share, 'config', 'camera_params.yaml')
+    pkg_share  = get_package_share_directory('orb_slam3_relocalization')
+    params_file = os.path.join(pkg_share, '..', '..', '..', '..', 'src', 'orb_slam3_relocalization', 'config', 'relocalization_params.yaml')
 
     mode     = LaunchConfiguration('mode')
     is_video = PythonExpression(["'", mode, "' == 'video'"])
@@ -29,7 +28,7 @@ def generate_launch_description():
             name='camera_node',
             output='screen',
             condition=IfCondition(is_video),
-            parameters=[camera_params],
+            parameters=[params_file],
         ),
 
         # ── camera_node: stream (webcam) mode ────────────────────────────────
@@ -39,7 +38,7 @@ def generate_launch_description():
             name='camera_node',
             output='screen',
             condition=UnlessCondition(is_video),
-            parameters=[camera_params, {'video_path': ''}],
+            parameters=[params_file, {'video_path': ''}],
         ),
 
         # ── relocalization_node ───────────────────────────────────────────────
@@ -48,6 +47,6 @@ def generate_launch_description():
             executable='relocalization_node',
             name='relocalization_node',
             output='screen',
-            parameters=[reloc_params],
+            parameters=[params_file],
         ),
     ])

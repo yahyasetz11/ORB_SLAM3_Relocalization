@@ -6,6 +6,14 @@
 #include <atomic>
 #include <chrono>
 
+static std::string expandPath(const std::string & path)
+{
+    if (path.empty() || path[0] != '~') return path;
+    const char * home = std::getenv("HOME");
+    if (!home) return path;
+    return std::string(home) + path.substr(1);
+}
+
 class MapCreatorNode : public rclcpp::Node
 {
 public:
@@ -16,9 +24,9 @@ public:
         declare_parameter("video_path",  "");   // empty → use webcam
         declare_parameter("camera_id",   0);
 
-        vocab_path_  = get_parameter("vocab_path").as_string();
-        config_path_ = get_parameter("config_path").as_string();
-        video_path_  = get_parameter("video_path").as_string();
+        vocab_path_  = expandPath(get_parameter("vocab_path").as_string());
+        config_path_ = expandPath(get_parameter("config_path").as_string());
+        video_path_  = expandPath(get_parameter("video_path").as_string());
         camera_id_   = get_parameter("camera_id").as_int();
 
         if (vocab_path_.empty() || config_path_.empty())

@@ -6,6 +6,8 @@
 #include <chrono>
 #include <unistd.h>
 #include <iomanip>
+#include <limits>
+#include <sophus/se3.hpp>
 
 #define M_PI 3.14159265358979323846
 
@@ -1106,4 +1108,252 @@ namespace Relocalization
                     cv::Point(origin.x + 12, origin.y - 5),
                     cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 0, 0), 1);
     }
+
+    // ── Semantic weight per YOLO class ID ────────────────────────────────────────
+    static float getSemanticWeight(int cls_id)
+    {
+        switch (cls_id)
+        {
+            case 164: return 1.0f;  // Door — highly permanent
+            default:  return 0.7f;  // Any other detected landmark
+        }
+    }
+
+    // ── 2×6 Jacobian of projection w.r.t. SE3 left perturbation ─────────────────
+    // J = ∂proj/∂δξ  (positive convention; matches solve(b) in solvePnPWeighted)
+    Eigen::Matrix<double, 2, 6> RelocalizationModule::computeProjectionJacobian(
+        const Eigen::Vector3d &Pc, double fx, double fy)
+    {
+        double Xc = Pc(0), Yc = Pc(1), Zc = Pc(2);
+        double Zc_inv  = 1.0 / Zc;
+        double Zc_inv2 = Zc_inv * Zc_inv;
+
+        Eigen::Matrix<double, 2, 6> J;
+        // Row 0: ∂u/∂δξ = [∂u/∂t | ∂u/∂φ]
+        J(0, 0) =  fx * Zc_inv;
+        J(0, 1) =  0.0;
+        J(0, 2) = -fx * Xc * Zc_inv2;
+        J(0, 3) = -fx * Xc * Yc * Zc_inv2;
+        J(0, 4) =  fx + fx * Xc * Xc * Zc_inv2;
+        J(0, 5) = -fx * Yc * Zc_inv;
+        // Row 1: ∂v/∂δξ
+        J(1, 0) =  0.0;
+        J(1, 1) =  fy * Zc_inv;
+        J(1, 2) = -fy * Yc * Zc_inv2;
+        J(1, 3) = -(fy + fy * Yc * Yc * Zc_inv2);
+        J(1, 4) =  fy * Xc * Yc * Zc_inv2;
+        J(1, 5) =  fy * Xc * Zc_inv;
+        return J;
+    }
+
+    // ── Mean unweighted reprojection error (public, for comparison logging) ───────
+    float RelocalizationModule::computeMeanReprojError(
+        const std::vector<cv::Point3f> &points3D,
+        const std::vector<cv::Point2f> &points2D,
+        const cv::Mat &rvec, const cv::Mat &tvec)
+    {
+        if (points3D.empty()) return 0.0f;
+        std::vector<cv::Point2f> projected;
+        cv::projectPoints(points3D, rvec, tvec, mK, mDistCoef, projected);
+        float total = 0.0f;
+        for (size_t i = 0; i < projected.size(); ++i)
+        {
+            float du = points2D[i].x - projected[i].x;
+            float dv = points2D[i].y - projected[i].y;
+            total += std::sqrt(du * du + dv * dv);
+        }
+        return total / (float)projected.size();
+    }
+
+    // ── Weight assignment from pre-segmented landmark regions ────────────────────
+    // Uses region.keypoints (already separated in relocalization_node) — no bbox check here.
+    std::vector<float> RelocalizationModule::assignWeightsFromLandmarks(
+        const std::vector<cv::Point2f> &matched2DPoints,
+        const std::vector<LandmarkRegion> &landmarkRegions,
+        float permanentWeight,
+        float backgroundWeight)
+    {
+        std::vector<float> weights(matched2DPoints.size(), backgroundWeight);
+
+        for (size_t i = 0; i < matched2DPoints.size(); ++i)
+        {
+            for (const auto &region : landmarkRegions)
+            {
+                for (const auto &kp : region.keypoints)
+                {
+                    if (std::abs(kp.pt.x - matched2DPoints[i].x) < 0.5f &&
+                        std::abs(kp.pt.y - matched2DPoints[i].y) < 0.5f)
+                    {
+                        float w = getSemanticWeight(region.cls_id) * permanentWeight;
+                        weights[i] = std::max(weights[i], w);
+                        break;
+                    }
+                }
+            }
+        }
+        return weights;
+    }
+
+    // ── Weighted PnP via Gauss-Newton / Levenberg-Marquardt ──────────────────────
+    WeightedPnPResult RelocalizationModule::solvePnPWeighted(
+        const std::vector<cv::Point3f> &points3D,
+        const std::vector<cv::Point2f> &points2D,
+        const std::vector<float> &weights,
+        int maxIterations,
+        double convergenceThreshold,
+        float inlierThresholdPx)
+    {
+        WeightedPnPResult result;
+        result.success    = false;
+        result.iterations = 0;
+
+        const int n = (int)points3D.size();
+        if (n < 6 || (int)points2D.size() != n || (int)weights.size() != n)
+            return result;
+
+        // Camera intrinsics (mK is CV_32F)
+        double fx = (double)mK.at<float>(0, 0);
+        double fy = (double)mK.at<float>(1, 1);
+        double cx = (double)mK.at<float>(0, 2);
+        double cy = (double)mK.at<float>(1, 2);
+
+        // Normalize weights so mean = 1  (preserves relative weighting, stable Hessian scale)
+        float w_sum = 0.0f;
+        for (float w : weights) w_sum += w;
+        float w_mean = w_sum / n;
+        std::vector<double> w_norm(n);
+        for (int i = 0; i < n; ++i)
+            w_norm[i] = (double)(weights[i] / w_mean);
+
+        // Warm-start with EPNP (avoids cold-start divergence)
+        cv::Mat rvec_init, tvec_init;
+        bool init_ok = cv::solvePnP(points3D, points2D, mK, mDistCoef,
+                                     rvec_init, tvec_init, false,
+                                     cv::SOLVEPNP_EPNP);
+        if (!init_ok)
+        {
+            rvec_init = cv::Mat::zeros(3, 1, CV_64F);
+            tvec_init = cv::Mat::zeros(3, 1, CV_64F);
+        }
+
+        // Convert rvec/tvec → Sophus SE3
+        cv::Mat R_init;
+        cv::Rodrigues(rvec_init, R_init);
+        // Ensure R_init is CV_64F
+        if (R_init.type() != CV_64F) R_init.convertTo(R_init, CV_64F);
+        if (tvec_init.type() != CV_64F) tvec_init.convertTo(tvec_init, CV_64F);
+
+        Eigen::Matrix3d R_e;
+        Eigen::Vector3d t_e;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                R_e(i, j) = R_init.at<double>(i, j);
+        for (int i = 0; i < 3; ++i)
+            t_e(i) = tvec_init.at<double>(i);
+
+        Sophus::SE3d T_cw(R_e, t_e);
+
+        // Levenberg-Marquardt
+        double lambda    = 1e-3;
+        double cost      = std::numeric_limits<double>::max();
+
+        for (int iter = 0; iter < maxIterations; ++iter)
+        {
+            Eigen::Matrix<double, 6, 6> H = Eigen::Matrix<double, 6, 6>::Zero();
+            Eigen::Matrix<double, 6, 1> b = Eigen::Matrix<double, 6, 1>::Zero();
+            double new_cost = 0.0;
+
+            for (int i = 0; i < n; ++i)
+            {
+                Eigen::Vector3d Xw(points3D[i].x, points3D[i].y, points3D[i].z);
+                Eigen::Vector3d Pc = T_cw * Xw;
+                if (Pc(2) <= 0) continue;
+
+                double u_proj = fx * Pc(0) / Pc(2) + cx;
+                double v_proj = fy * Pc(1) / Pc(2) + cy;
+
+                // r = obs - proj
+                Eigen::Vector2d r(points2D[i].x - u_proj,
+                                  points2D[i].y - v_proj);
+
+                Eigen::Matrix<double, 2, 6> J = computeProjectionJacobian(Pc, fx, fy);
+
+                double w = w_norm[i];
+                H += w * J.transpose() * J;
+                // GN: H δξ = Σ w Jᵀ r  (valid when J = +∂proj/∂ξ, r = obs-proj)
+                b += w * J.transpose() * r;
+                new_cost += w * r.squaredNorm();
+            }
+
+            // LM damping
+            Eigen::Matrix<double, 6, 6> H_damped = H;
+            for (int k = 0; k < 6; ++k)
+                H_damped(k, k) += lambda * H(k, k);
+
+            Eigen::Matrix<double, 6, 1> delta = H_damped.ldlt().solve(b);
+
+            Sophus::SE3d T_new = Sophus::SE3d::exp(delta) * T_cw;
+
+            if (new_cost < cost)
+            {
+                T_cw  = T_new;
+                cost  = new_cost;
+                lambda /= 10.0;
+            }
+            else
+            {
+                lambda *= 10.0;
+            }
+
+            result.iterations = iter + 1;
+            if (delta.norm() < convergenceThreshold)
+                break;
+        }
+
+        // Extract final rvec/tvec from converged Sophus pose
+        Eigen::Matrix3d R_final = T_cw.rotationMatrix();
+        Eigen::Vector3d t_final = T_cw.translation();
+
+        cv::Mat R_cv(3, 3, CV_64F), t_cv(3, 1, CV_64F);
+        for (int i = 0; i < 3; ++i)
+        {
+            for (int j = 0; j < 3; ++j)
+                R_cv.at<double>(i, j) = R_final(i, j);
+            t_cv.at<double>(i) = t_final(i);
+        }
+        cv::Mat rvec_final;
+        cv::Rodrigues(R_cv, rvec_final);
+
+        // Count inliers using unweighted pixel threshold (fair comparison with solvePnPRansac)
+        std::vector<int> inliers;
+        for (int i = 0; i < n; ++i)
+        {
+            Eigen::Vector3d Xw(points3D[i].x, points3D[i].y, points3D[i].z);
+            Eigen::Vector3d Pc = T_cw * Xw;
+            if (Pc(2) <= 0) continue;
+            float u_proj = (float)(fx * Pc(0) / Pc(2) + cx);
+            float v_proj = (float)(fy * Pc(1) / Pc(2) + cy);
+            float du = points2D[i].x - u_proj;
+            float dv = points2D[i].y - v_proj;
+            if (std::sqrt(du * du + dv * dv) < inlierThresholdPx)
+                inliers.push_back(i);
+        }
+
+        if ((int)inliers.size() < mMinInliers)
+            return result;
+
+        result.success               = true;
+        result.rvec                  = rvec_final.clone();
+        result.tvec                  = t_cv.clone();
+        result.numInliers            = (int)inliers.size();
+        result.totalCorrespondences  = n;
+        result.inlierIndices         = std::move(inliers);
+        result.weightedReprojectionError = (float)(cost / n);
+        result.meanReprojectionError = computeMeanReprojError(
+            points3D, points2D, rvec_final, t_cv);
+        result.position = computePosition(rvec_final, t_cv);
+
+        return result;
+    }
+
 } // namespace Relocalization

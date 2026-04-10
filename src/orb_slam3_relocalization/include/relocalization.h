@@ -3,6 +3,7 @@
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/features2d.hpp>
+#include <Eigen/Dense>
 #include <string>
 #include <vector>
 #include <memory>
@@ -23,6 +24,20 @@ namespace Relocalization
         int cls_id;                              // YOLO class id (e.g. 164 = door)
         cv::Rect bbox;                           // bounding box in process resolution
         std::vector<cv::KeyPoint> keypoints;     // all ORB keypoints inside this bbox
+    };
+
+    struct WeightedPnPResult
+    {
+        bool success;
+        cv::Point3f position;
+        int numInliers;
+        int totalCorrespondences;
+        float meanReprojectionError;
+        float weightedReprojectionError;
+        int iterations;
+        std::vector<int> inlierIndices;
+        cv::Mat rvec;
+        cv::Mat tvec;
     };
 
     struct LocationResult
@@ -67,6 +82,29 @@ namespace Relocalization
 
         cv::Mat createMapVisualization(const LocationResult &result, cv::Size targetSize);
         cv::Point2f project3DTo2D(const cv::Point3f &pt3D, int mapHeight);
+
+        // Weighted PnP (Gauss-Newton / Levenberg-Marquardt)
+        WeightedPnPResult solvePnPWeighted(
+            const std::vector<cv::Point3f> &points3D,
+            const std::vector<cv::Point2f> &points2D,
+            const std::vector<float> &weights,
+            int maxIterations = 100,
+            double convergenceThreshold = 1e-6,
+            float inlierThresholdPx = 2.0f);
+
+        std::vector<float> assignWeightsFromLandmarks(
+            const std::vector<cv::Point2f> &matched2DPoints,
+            const std::vector<LandmarkRegion> &landmarkRegions,
+            float permanentWeight = 1.0f,
+            float backgroundWeight = 0.3f);
+
+        float computeMeanReprojError(
+            const std::vector<cv::Point3f> &points3D,
+            const std::vector<cv::Point2f> &points2D,
+            const cv::Mat &rvec, const cv::Mat &tvec);
+
+        Eigen::Matrix<double, 2, 6> computeProjectionJacobian(
+            const Eigen::Vector3d &Pc, double fx, double fy);
 
     private:
         // Map data
