@@ -14,24 +14,33 @@ class BBOX_Coords(Node):
     def __init__(self):
         super().__init__('minimal_publisher')
         # Model init — realpath resolves symlink from install/ back to source
-        pkg_dir = os.path.dirname(os.path.realpath(__file__))
-        self.model_path = os.path.join(pkg_dir, "model", "yolov8n-oiv7")
+        # pkg_dir = os.path.dirname(os.path.realpath(__file__))
+        # self.model_path = os.path.join(pkg_dir, "model", "model1")
+        
+        self.model_path = "/home/orange/ORB_SLAM3_Relocalization/src/yolo_bbox/yolo_bbox/model/model1.pt"
         self.model = YOLO(self.model_path)
         self.conf_value = 0.2
+        
 
         self.results = self.create_publisher(String, 'yolo/results', 10)
         self.bbox_coords = self.create_publisher(Int32MultiArray, 'bbox_coords', 10)
 
-        self.bridge = CvBridge()
-        self.latest_frame = None
-        self.img_sub = self.create_subscription(
-            Image, '/camera/image_raw', self.image_callback, 10)
+        # Camera input =====
+        # self.bridge = CvBridge()
+        # self.latest_frame = None
+        # self.img_sub = self.create_subscription(
+        #     Image, '/camera/image_raw', self.image_callback, 10)
+        
+        # Video input ======
+        # self.video_path = os.path.join(pkg_dir, "data", "validation_back.mp4")
+        self.video_path = "/home/orange/ORB_SLAM3_Relocalization/src/yolo_bbox/yolo_bbox/data/validation_back.mp4"
+        
+        self.cap = cv2.VideoCapture(self.video_path)
 
         self.frame_id = 0
-        self.DOOR_ID = 164
         self.frame_skip = 3
-        self.json_path = "door_detections.jsonl"
-        self.save_json = False
+        self.json_path = "validation_back.jsonl"
+        self.save_json = True
 
         # Process at a slower rate than publish — YOLO is heavy
         self.timer = self.create_timer(0.1, self.detection_callback)
@@ -45,9 +54,10 @@ class BBOX_Coords(Node):
         if self.frame_id % self.frame_skip != 0:
             self.frame_id += 1
             return
-        if self.latest_frame is None:
-            return
-        frame = self.latest_frame.copy()
+        # if self.latest_frame is None:
+        #     return
+        # frame = self.latest_frame.copy()
+        ret, frame = self.cap.read()
     
         detected = self.model.predict(frame, conf=self.conf_value, verbose=False)
         detections = []
@@ -61,8 +71,6 @@ class BBOX_Coords(Node):
                 conf = float(box.conf[0])
                 cls_id = int(box.cls[0])
                 
-                if cls_id != self.DOOR_ID:
-                    continue
 
                 det = {
                     "cls_id": cls_id,
