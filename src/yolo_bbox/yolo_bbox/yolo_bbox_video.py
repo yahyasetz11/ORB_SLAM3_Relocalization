@@ -14,10 +14,8 @@ class BBOX_Coords(Node):
     def __init__(self):
         super().__init__('minimal_publisher')
         # Model init — realpath resolves symlink from install/ back to source
-        # pkg_dir = os.path.dirname(os.path.realpath(__file__))
-        # self.model_path = os.path.join(pkg_dir, "model", "model1")
-        
-        self.model_path = "/home/orange/ORB_SLAM3_Relocalization/src/yolo_bbox/yolo_bbox/model/model1.pt"
+        pkg_dir = os.path.dirname(os.path.realpath(__file__))
+        self.model_path = os.path.join(pkg_dir, "model", "model1.pt")
         self.model = YOLO(self.model_path)
         self.conf_value = 0.2
         
@@ -26,16 +24,15 @@ class BBOX_Coords(Node):
         self.bbox_coords = self.create_publisher(Int32MultiArray, 'bbox_coords', 10)
 
         # Camera input =====
-        # self.bridge = CvBridge()
-        # self.latest_frame = None
-        # self.img_sub = self.create_subscription(
-        #     Image, '/camera/image_raw', self.image_callback, 10)
+        self.bridge = CvBridge()
+        self.latest_frame = None
+        self.img_sub = self.create_subscription(
+            Image, '/camera/image_raw', self.image_callback, 10)
         
         # Video input ======
         # self.video_path = os.path.join(pkg_dir, "data", "validation_back.mp4")
-        self.video_path = "/home/orange/ORB_SLAM3_Relocalization/src/yolo_bbox/yolo_bbox/data/validation_back.mp4"
-        
-        self.cap = cv2.VideoCapture(self.video_path)
+        # self.video_path = "/home/orange/ORB_SLAM3_Relocalization/src/yolo_bbox/yolo_bbox/data/validation_back.mp4"
+        # self.cap = cv2.VideoCapture(self.video_path)
 
         self.frame_id = 0
         self.frame_skip = 3
@@ -54,10 +51,10 @@ class BBOX_Coords(Node):
         if self.frame_id % self.frame_skip != 0:
             self.frame_id += 1
             return
-        # if self.latest_frame is None:
-        #     return
-        # frame = self.latest_frame.copy()
-        ret, frame = self.cap.read()
+        if self.latest_frame is None:
+            return
+        frame = self.latest_frame.copy()
+        # ret, frame = self.cap.read()
     
         detected = self.model.predict(frame, conf=self.conf_value, verbose=False)
         detections = []

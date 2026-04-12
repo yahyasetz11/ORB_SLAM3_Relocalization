@@ -1,10 +1,12 @@
 camera_node:
   ros__parameters:
-    video_path: "~/Documents/ORB_SLAM3_Relocalization/data/tum/walking_xyz.mp4"
+    # video_path: "~/Documents/ORB_SLAM3_Relocalization/data/tum/walking_xyz.mp4"
+    video_path: "~/Documents/ORB_SLAM3_Relocalization/data/dataset1.mp4"
     camera_id: 0 # used when video_path is empty (webcam mode)
 
 relocalization_node:
   ros__parameters:
     vocab_path: "~/Documents/ORB_SLAM3/Vocabulary/ORBvoc.txt"
-    config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/tum_fr3.yaml"
+    # config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/tum_fr3.yaml"
+    config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/webcam_complete.yaml"
     visualize: true

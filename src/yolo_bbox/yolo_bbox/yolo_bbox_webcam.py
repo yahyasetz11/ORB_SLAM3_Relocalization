@@ -15,7 +15,7 @@ class BBOX_Coords(Node):
         super().__init__('minimal_publisher')
         # Model init — realpath resolves symlink from install/ back to source
         pkg_dir = os.path.dirname(os.path.realpath(__file__))
-        self.model_path = os.path.join(pkg_dir, "model", "model1")
+        self.model_path = os.path.join(pkg_dir, "model", "model1.pt")
         self.model = YOLO(self.model_path)
         self.conf_value = 0.5
         
