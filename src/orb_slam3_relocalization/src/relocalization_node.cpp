@@ -314,12 +314,15 @@ public:
 
                 if (result.success)
                 {
-                    // Inlier matches (green)
+                    // Inlier matches: red if landmark, green if background
                     for (int idx : result.inlierIndices)
                     {
                         cv::Point2f scaledPt(result.matched2DPoints[idx].x * kpScale,
                                              result.matched2DPoints[idx].y * kpScale);
-                        cv::circle(displayFrame, scaledPt, 5, cv::Scalar(0, 255, 0), 2);
+                        cv::Scalar color = isInLandmark(scaledPt)
+                            ? cv::Scalar(0, 0, 255)
+                            : cv::Scalar(0, 255, 0);
+                        cv::circle(displayFrame, scaledPt, 5, color, 2);
                     }
                 }
 
@@ -334,6 +337,7 @@ public:
                 if (result.success)
                 {
                     // Lines connecting inlier 2D points to their 3D map projections
+                    // Red for landmark correspondences, green for background
                     for (int idx : result.inlierIndices)
                     {
                         cv::Point2f pt2D(result.matched2DPoints[idx].x * kpScale,
@@ -341,7 +345,10 @@ public:
                         cv::Point2f pt3DProj = reloc_->project3DTo2D(
                             result.matched3DPoints[idx], displaySize.height);
                         pt3DProj.x += displaySize.width;
-                        cv::line(combined, pt2D, pt3DProj, cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+                        cv::Scalar lineColor = isInLandmark(pt2D)
+                            ? cv::Scalar(0, 0, 255)
+                            : cv::Scalar(0, 255, 0);
+                        cv::line(combined, pt2D, pt3DProj, lineColor, 1, cv::LINE_AA);
                     }
 
                     cv::Scalar statusColor;
