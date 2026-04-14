@@ -275,6 +275,32 @@ public:
                 cv::Mat displayFrame;
                 cv::resize(frame, displayFrame, displaySize);
 
+                // Helper: returns true if a display-resolution point is inside any landmark bbox
+                auto isInLandmark = [&](const cv::Point2f &displayPt) -> bool {
+                    for (const auto &region : result.landmarkRegions)
+                    {
+                        cv::Rect scaledBbox(
+                            (int)(region.bbox.x      * kpScale),
+                            (int)(region.bbox.y      * kpScale),
+                            (int)(region.bbox.width  * kpScale),
+                            (int)(region.bbox.height * kpScale));
+                        if (scaledBbox.contains(cv::Point((int)displayPt.x, (int)displayPt.y)))
+                            return true;
+                    }
+                    return false;
+                };
+
+                // Draw landmark bounding boxes (red)
+                for (const auto &region : result.landmarkRegions)
+                {
+                    cv::Rect scaledBbox(
+                        (int)(region.bbox.x      * kpScale),
+                        (int)(region.bbox.y      * kpScale),
+                        (int)(region.bbox.width  * kpScale),
+                        (int)(region.bbox.height * kpScale));
+                    cv::rectangle(displayFrame, scaledBbox, cv::Scalar(0, 0, 255), 2);
+                }
+
                 // All ORB keypoints (gray)
                 for (const auto &kp : result.queryKeypoints)
                 {
