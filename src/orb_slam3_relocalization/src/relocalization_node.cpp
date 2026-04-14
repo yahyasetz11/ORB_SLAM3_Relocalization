@@ -304,6 +304,14 @@ public:
                     cv::circle(displayFrame, scaledPt, 2, cv::Scalar(150, 150, 150), -1);
                 }
 
+                // Landmark keypoints (red, drawn on top of gray)
+                for (const auto &kp : result.queryKeypoints)
+                {
+                    cv::Point2f scaledPt(kp.pt.x * kpScale, kp.pt.y * kpScale);
+                    if (isInLandmark(scaledPt))
+                        cv::circle(displayFrame, scaledPt, 4, cv::Scalar(0, 0, 255), -1);
+                }
+
                 if (result.success)
                 {
                     // Inlier matches (green)
