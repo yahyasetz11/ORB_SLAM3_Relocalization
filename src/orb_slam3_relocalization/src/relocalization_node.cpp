@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iomanip>
 #include <mutex>
+#include <map>
 #include <sstream>
 #include <cstdlib>  // getenv
 
@@ -373,6 +374,35 @@ public:
                     cv::putText(combined, "SEARCHING...",
                                 cv::Point(30, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5,
                                 cv::Scalar(0, 100, 255), 2);
+                }
+
+                // ── Landmark status line (always visible) ─────────────────────
+                {
+                    std::string landmarkStr;
+                    cv::Scalar landmarkColor;
+                    if (result.landmarkRegions.empty())
+                    {
+                        landmarkStr   = "Landmarks: NONE";
+                        landmarkColor = cv::Scalar(150, 150, 150);
+                    }
+                    else
+                    {
+                        std::map<std::string, int> counts;
+                        for (const auto &region : result.landmarkRegions)
+                        {
+                            std::string name = (region.cls_id == 164) ? "door" : "other";
+                            counts[name]++;
+                        }
+                        std::ostringstream lm;
+                        lm << "Landmarks:";
+                        for (const auto &kv : counts)
+                            lm << " " << kv.first << "(" << kv.second << ")";
+                        landmarkStr   = lm.str();
+                        landmarkColor = cv::Scalar(0, 0, 255);
+                    }
+                    cv::putText(combined, landmarkStr,
+                                cv::Point(30, 55), cv::FONT_HERSHEY_SIMPLEX, 0.4,
+                                landmarkColor, 1);
                 }
 
                 cv::imshow("Relocalization Node: Camera + Map", combined);
