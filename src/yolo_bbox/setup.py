@@ -1,4 +1,5 @@
 from setuptools import find_packages, setup
+from glob import glob
 
 package_name = 'yolo_bbox'
 
@@ -10,7 +11,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        
+        ('share/' + package_name + '/config', glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -30,7 +31,7 @@ setup(
             'yolo_bbox_image = yolo_bbox.yolo_bbox_image:main',
             'yolo_bbox_video = yolo_bbox.yolo_bbox_video:main',
             'yolo_bbox_webcam = yolo_bbox.yolo_bbox_webcam:main',
-            'yolo_bbox_receiver = yolo_bbox.yolo_bbox_receiver:main'
+            'yolo_bbox_receiver = yolo_bbox.yolo_bbox_receiver:main',
         ],
     },
 )
