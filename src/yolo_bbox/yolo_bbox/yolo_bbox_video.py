@@ -3,148 +3,188 @@ import os
 import rclpy
 import time
 import json
+import queue
+import threading
 
+import torch
 from ultralytics import YOLO
 from rclpy.node import Node
 from cv_bridge import CvBridge
-from std_msgs.msg import String, Int32MultiArray, Int32
+from std_msgs.msg import String, Int32MultiArray
 from sensor_msgs.msg import Image
+
 
 class BBOX_Coords(Node):
     def __init__(self):
-        super().__init__('minimal_publisher')
-        # Model init — realpath resolves symlink from install/ back to source
+        super().__init__('yolo_bbox_node')
+
+        # Parameters (loaded from yolo_bbox_params.yaml via --params-file)
+        self.declare_parameter('device', 'cuda')
+        self.declare_parameter('display', True)
+        self.declare_parameter('conf', 0.2)
+
+        device_param = self.get_parameter('device').get_parameter_value().string_value
+        self.display = self.get_parameter('display').get_parameter_value().bool_value
+        self.conf_value = self.get_parameter('conf').get_parameter_value().double_value
+
+        # GPU fallback
+        if device_param == 'cuda' and not torch.cuda.is_available():
+            self.get_logger().warn(
+                'CUDA requested but not available — falling back to CPU')
+            self.device = 'cpu'
+        else:
+            self.device = device_param
+        self.get_logger().info(f'Running YOLO on device: {self.device}')
+
+        # Model
         pkg_dir = os.path.dirname(os.path.realpath(__file__))
-        self.model_path = os.path.join(pkg_dir, "model", "model1.pt")
+        self.model_path = os.path.join(pkg_dir, 'model', 'model1.pt')
         self.model = YOLO(self.model_path)
-        self.conf_value = 0.2
-        
 
-        self.results = self.create_publisher(String, 'yolo/results', 10)
-        self.bbox_coords = self.create_publisher(Int32MultiArray, 'bbox_coords', 10)
+        # Publishers
+        self.results_pub = self.create_publisher(String, 'yolo/results', 10)
+        self.bbox_pub = self.create_publisher(Int32MultiArray, 'bbox_coords', 10)
 
-        # Camera input =====
+        # Camera subscription — pushes frames into a single-slot queue
         self.bridge = CvBridge()
-        self.latest_frame = None
+        self.frame_queue = queue.Queue(maxsize=1)
         self.img_sub = self.create_subscription(
             Image, '/camera/image_raw', self.image_callback, 10)
-        
-        # Video input ======
-        # self.video_path = os.path.join(pkg_dir, "data", "validation_back.mp4")
-        # self.video_path = "/home/orange/ORB_SLAM3_Relocalization/src/yolo_bbox/yolo_bbox/data/validation_back.mp4"
-        # self.cap = cv2.VideoCapture(self.video_path)
 
-        self.frame_id = 0
-        self.frame_skip = 3
-        self.json_path = "validation_back.jsonl"
+        self.json_path = 'validation_back.jsonl'
         self.save_json = True
 
-        # Process at a slower rate than publish — YOLO is heavy
-        self.timer = self.create_timer(0.1, self.detection_callback)
+        # Start background inference thread
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._inference_loop, daemon=True)
+        self._thread.start()
 
-        self.get_logger().info("Start YOLO Video Detection — subscribed to /camera/image_raw")
+        self.get_logger().info(
+            'YOLO bbox node started — subscribed to /camera/image_raw')
+
+    # ------------------------------------------------------------------
+    # ROS2 callback — runs on the spin thread, must never block
+    # ------------------------------------------------------------------
 
     def image_callback(self, msg):
-        self.latest_frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        try:
+            self.frame_queue.put_nowait(frame)
+        except queue.Full:
+            try:
+                self.frame_queue.get_nowait()   # evict stale frame
+            except queue.Empty:
+                pass
+            self.frame_queue.put_nowait(frame)  # put freshest frame
 
-    def detection_callback(self):
-        if self.frame_id % self.frame_skip != 0:
-            self.frame_id += 1
-            return
-        if self.latest_frame is None:
-            return
-        frame = self.latest_frame.copy()
-        # ret, frame = self.cap.read()
-    
-        detected = self.model.predict(frame, conf=self.conf_value, verbose=False)
-        detections = []
+    # ------------------------------------------------------------------
+    # Inference thread — runs independently of the spin thread
+    # ------------------------------------------------------------------
 
-        for obj in detected: 
-            for box in obj.boxes:
-                # Extracting the coords
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
+    def _inference_loop(self):
+        frame_id = 0
+        prev_time = time.time()
 
-                # Extract conf score and cls label
-                conf = float(box.conf[0])
-                cls_id = int(box.cls[0])
-                
+        while not self._stop_event.is_set():
+            try:
+                frame = self.frame_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue  # check stop_event and retry
 
-                det = {
-                    "cls_id": cls_id,
-                    "conf_score": conf,
-                    "bbox_coords": {
-                        "x1": int(x1),
-                        "y1": int(y1),
-                        "x2": int(x2),
-                        "y2": int(y2)
-                    },
-                    "corner_coords": {
-                        "top_left": [int(x1), int(y1)],
-                        "top_right": [int(x2), int(y1)],
-                        "bot_left": [int(x1), int(y2)],
-                        "bot_right": [int(x2), int(y2)]
-                    }
-                }
-                
-                detections.append(det)
-                
-                # Debugging
-                label = f"id:{cls_id} conf:{conf:.2f}"
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                cv2.putText(
-                    frame,
-                    label,
-                    (int(x1), max(20, int(y1) - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 255, 0),
-                    2
-                )
+            detected = self.model.predict(
+                frame, conf=self.conf_value, device=self.device, verbose=False)
+            detections = []
 
-                # # Coordinates
-                # top_l = (int(x1), int(y1))
-                # top_r = (int(x2), int(y1))
-                # bot_l = (int(x1), int(y2))
-                # bot_r = (int(x2), int(y2))
+            for obj in detected:
+                for box in obj.boxes:
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    conf = float(box.conf[0])
+                    cls_id = int(box.cls[0])
 
-                # print("Top Left: ", top_l)
-                # print("Top Right: ", top_r)
-                # print("Bottom Left: ", bot_l)
-                # print("Bottom Right: ", bot_r)
+                    detections.append({
+                        'cls_id': cls_id,
+                        'conf_score': conf,
+                        'bbox_coords': {
+                            'x1': int(x1), 'y1': int(y1),
+                            'x2': int(x2), 'y2': int(y2),
+                        },
+                        'corner_coords': {
+                            'top_left':  [int(x1), int(y1)],
+                            'top_right': [int(x2), int(y1)],
+                            'bot_left':  [int(x1), int(y2)],
+                            'bot_right': [int(x2), int(y2)],
+                        },
+                    })
 
-        msg_out = String()
-        msg_out.data = json.dumps({
-            "frame_id": self.frame_id,
-            "detections": detections
-        })
-        self.results.publish(msg_out)
-        
-        if self.save_json:
-            with open(self.json_path, "a") as file:
-                file.write(msg_out.data + "\n")
-        
-        self.frame_id += 1
-        
-        cv2.putText(frame, f"Frame: {self.frame_id}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-        cv2.putText(frame, f"Doors: {len(detections)}", (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-        # Debugging Show
-        cv2.imshow("YOLO Video", frame)
-        if cv2.waitKey(1) == 27:
-            self.get_logger().info("Shutting down")
-            rclpy.shutdown()
-                
+            # Publish results
+            msg_out = String()
+            msg_out.data = json.dumps({
+                'frame_id': frame_id,
+                'detections': detections,
+            })
+            self.results_pub.publish(msg_out)
+
+            if self.save_json:
+                with open(self.json_path, 'a') as f:
+                    f.write(msg_out.data + '\n')
+
+            # Optional display window
+            if self.display:
+                now = time.time()
+                fps = 1.0 / max(now - prev_time, 1e-6)
+                prev_time = now
+
+                display_frame = frame.copy()
+                for obj in detected:
+                    for box in obj.boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        conf = float(box.conf[0])
+                        cls_id = int(box.cls[0])
+                        label = f'id:{cls_id} conf:{conf:.2f}'
+                        cv2.rectangle(
+                            display_frame,
+                            (int(x1), int(y1)), (int(x2), int(y2)),
+                            (0, 255, 0), 2)
+                        cv2.putText(
+                            display_frame, label,
+                            (int(x1), max(20, int(y1) - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                cv2.putText(display_frame, f'Frame: {frame_id}',
+                            (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+                cv2.putText(display_frame, f'Doors: {len(detections)}',
+                            (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+                cv2.putText(display_frame, f'FPS: {fps:.1f}',
+                            (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                cv2.putText(display_frame, f'Device: {self.device}',
+                            (10, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+                cv2.imshow('YOLO Video', display_frame)
+                if cv2.waitKey(1) == 27:
+                    rclpy.shutdown()
+                    break
+
+            frame_id += 1
+
+    # ------------------------------------------------------------------
+    # Shutdown
+    # ------------------------------------------------------------------
+
     def destroy_node(self):
+        self._stop_event.set()
+        self._thread.join(timeout=3.0)
         cv2.destroyAllWindows()
         super().destroy_node()
 
+
 def main(args=None):
     rclpy.init(args=args)
-
-    bbox = BBOX_Coords()
-    rclpy.spin(bbox)
-
-    bbox.destroy_node()
+    node = BBOX_Coords()
+    rclpy.spin(node)
+    node.destroy_node()
     rclpy.shutdown()
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main()
