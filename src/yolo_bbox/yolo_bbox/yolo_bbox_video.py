@@ -1,5 +1,6 @@
 import cv2
 import os
+import signal
 import rclpy
 import time
 import json
@@ -12,6 +13,25 @@ from rclpy.node import Node
 from cv_bridge import CvBridge
 from std_msgs.msg import String
 from sensor_msgs.msg import Image
+
+
+def _enqueue_latest(frame_queue: queue.Queue, frame) -> None:
+    """Drop stale frame and put the newest one. Called from image_callback."""
+    try:
+        frame_queue.put_nowait(frame)
+    except queue.Full:
+        try:
+            frame_queue.get_nowait()
+        except queue.Empty:
+            pass
+        frame_queue.put_nowait(frame)
+
+
+def _select_device(requested: str) -> str:
+    """Return 'cpu' if CUDA requested but unavailable, else return requested."""
+    if requested == 'cuda' and not torch.cuda.is_available():
+        return 'cpu'
+    return requested
 
 
 class BBOX_Coords(Node):
@@ -32,12 +52,10 @@ class BBOX_Coords(Node):
         self.json_path = self.get_parameter('json_path').get_parameter_value().string_value
 
         # GPU fallback
-        if device_param == 'cuda' and not torch.cuda.is_available():
+        self.device = _select_device(device_param)
+        if self.device != device_param:
             self.get_logger().warn(
                 'CUDA requested but not available — falling back to CPU')
-            self.device = 'cpu'
-        else:
-            self.device = device_param
         self.get_logger().info(f'Running YOLO on device: {self.device}')
 
         # Model
@@ -69,14 +87,7 @@ class BBOX_Coords(Node):
 
     def image_callback(self, msg):
         frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
-        try:
-            self.frame_queue.put_nowait(frame)
-        except queue.Full:
-            try:
-                self.frame_queue.get_nowait()   # evict stale frame
-            except queue.Empty:
-                pass
-            self.frame_queue.put_nowait(frame)  # put freshest frame
+        _enqueue_latest(self.frame_queue, frame)
 
     # ------------------------------------------------------------------
     # Inference thread — runs independently of the spin thread
@@ -162,7 +173,9 @@ class BBOX_Coords(Node):
 
                 cv2.imshow('YOLO Video', display_frame)
                 if cv2.waitKey(1) == 27:
-                    rclpy.shutdown()
+                    self.get_logger().info('ESC pressed — shutting down')
+                    self._stop_event.set()
+                    os.kill(os.getpid(), signal.SIGINT)
                     break
 
             frame_id += 1
