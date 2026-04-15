@@ -6,3 +6,4 @@ install/
 data/
 maps/
 error.txt
+.worktrees/
