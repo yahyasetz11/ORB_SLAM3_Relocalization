@@ -10,7 +10,7 @@ import torch
 from ultralytics import YOLO
 from rclpy.node import Node
 from cv_bridge import CvBridge
-from std_msgs.msg import String, Int32MultiArray
+from std_msgs.msg import String
 from sensor_msgs.msg import Image
 
 
@@ -22,10 +22,14 @@ class BBOX_Coords(Node):
         self.declare_parameter('device', 'cuda')
         self.declare_parameter('display', True)
         self.declare_parameter('conf', 0.2)
+        self.declare_parameter('save_json', False)
+        self.declare_parameter('json_path', 'validation_back.jsonl')
 
         device_param = self.get_parameter('device').get_parameter_value().string_value
         self.display = self.get_parameter('display').get_parameter_value().bool_value
         self.conf_value = self.get_parameter('conf').get_parameter_value().double_value
+        self.save_json = self.get_parameter('save_json').get_parameter_value().bool_value
+        self.json_path = self.get_parameter('json_path').get_parameter_value().string_value
 
         # GPU fallback
         if device_param == 'cuda' and not torch.cuda.is_available():
@@ -43,16 +47,12 @@ class BBOX_Coords(Node):
 
         # Publishers
         self.results_pub = self.create_publisher(String, 'yolo/results', 10)
-        self.bbox_pub = self.create_publisher(Int32MultiArray, 'bbox_coords', 10)
 
         # Camera subscription — pushes frames into a single-slot queue
         self.bridge = CvBridge()
         self.frame_queue = queue.Queue(maxsize=1)
         self.img_sub = self.create_subscription(
             Image, '/camera/image_raw', self.image_callback, 10)
-
-        self.json_path = 'validation_back.jsonl'
-        self.save_json = True
 
         # Start background inference thread
         self._stop_event = threading.Event()

@@ -1,5 +1,7 @@
 yolo_bbox_node:
   ros__parameters:
-    device: 'cuda'    # 'cuda' or 'cpu' — node auto-falls back to cpu if CUDA unavailable
-    display: true     # show YOLO detection window (set false to disable for navigation)
-    conf: 0.2         # detection confidence threshold
+    device: 'cuda'                      # 'cuda' or 'cpu' — node auto-falls back to cpu if CUDA unavailable
+    display: true                       # show YOLO detection window (set false to disable for navigation)
+    conf: 0.2                           # detection confidence threshold
+    save_json: false                    # save detections to JSONL file (for validation/debugging)
+    json_path: 'validation_back.jsonl'  # output path for JSONL (relative to launch directory)
