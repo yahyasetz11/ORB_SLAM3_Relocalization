@@ -1,0 +1,17 @@
+{
+    "Lab A": {
+        "x": 5.0,
+        "y": 5.0,
+        "description": "Centre of map"
+    },
+    "Cafeteria": {
+        "x": 7.5,
+        "y": 7.5,
+        "description": "Top-right quadrant"
+    },
+    "Entrance": {
+        "x": 2.5,
+        "y": 7.5,
+        "description": "Top-left quadrant"
+    }
+}

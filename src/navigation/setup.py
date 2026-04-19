@@ -10,8 +10,12 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config',
+            ['navigation/config/locations.yaml']),
+        ('share/' + package_name + '/launch',
+            ['launch/test_navigation.launch.py']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'numpy', 'opencv-python', 'cv_bridge'],
     zip_safe=True,
     maintainer='your_name',
     maintainer_email='your@email.com',
@@ -21,6 +25,8 @@ setup(
     entry_points={
         'console_scripts': [
             'navigation = navigation.main:main',
+            'navigation_ui = navigation.ui.map_ui_node:main',
+            'fake_data_publisher = navigation.test.fake_data_publisher:main',
         ],
     },
 )

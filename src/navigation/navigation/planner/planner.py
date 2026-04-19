@@ -8,10 +8,11 @@ from .utils import world_2_occupancy_map, is_standable, is_in_bounds
 
 class Planner():
     def __init__(
-        self, 
-        world_map:NDArray, 
-        start_coords:PixelCoords, goal_coords:PixelCoords, 
+        self,
+        world_map:NDArray,
+        start_coords:PixelCoords, goal_coords:PixelCoords,
         goal_threshold:float=3, iter_limit:int=10000,
+        inflation_radius:int=5,
         ):
         
         self.world_map = world_map.copy()
@@ -23,9 +24,10 @@ class Planner():
         self.search_done = False
         self.occupancy_map = None
         self.inflated_obstacle_map = None
+        self.inflation_radius = inflation_radius
 
     def set_map(self):
-        self.occupancy_map, self.inflated_obstacle_map = world_2_occupancy_map(self.world_map, self.start_coords, self.goal_coords)
+        self.occupancy_map, self.inflated_obstacle_map = world_2_occupancy_map(self.world_map, self.start_coords, self.goal_coords, self.inflation_radius)
 
     def normalize_start(self):
         if not isinstance(self.start_coords, PixelCoords):
@@ -72,10 +74,8 @@ class Planner():
         
         if not self.validate_request():
             raise ValueError("Not ready")
-        print("Preloop")
-        self.preloop()
 
-        print("Step")
+        self.preloop()
 
         for i in range(self.iter_limit):
             self.step()
@@ -83,11 +83,8 @@ class Planner():
                 break
             if self.search_done:
                 break
-                
-        print("Postloop")
 
         path, visited_nodes = self.postloop()
-        print("Done")
         return path, visited_nodes
             
         
