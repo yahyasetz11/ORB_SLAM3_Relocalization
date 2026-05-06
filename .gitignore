@@ -8,3 +8,5 @@ maps/
 error.txt
 .worktrees/
 docs/superpowers/
+CLAUDE.md
+*.csv

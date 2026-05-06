@@ -75,13 +75,15 @@ class RelocalizationNode : public rclcpp::Node
 public:
     RelocalizationNode() : Node("relocalization_node"), ready_(false)
     {
-        declare_parameter("vocab_path",  "");
-        declare_parameter("config_path", "");
-        declare_parameter("visualize",   true);
+        declare_parameter("vocab_path",        "");
+        declare_parameter("config_path",       "");
+        declare_parameter("visualize",         true);
+        declare_parameter("use_weighted_pnp",  false);
 
-        vocab_path_  = expandPath(get_parameter("vocab_path").as_string());
-        config_path_ = expandPath(get_parameter("config_path").as_string());
-        visualize_   = get_parameter("visualize").as_bool();
+        vocab_path_       = expandPath(get_parameter("vocab_path").as_string());
+        config_path_      = expandPath(get_parameter("config_path").as_string());
+        visualize_        = get_parameter("visualize").as_bool();
+        use_weighted_pnp_ = get_parameter("use_weighted_pnp").as_bool();
 
         if (vocab_path_.empty() || config_path_.empty())
         {
@@ -95,9 +97,10 @@ public:
             visualize_ = false;
         }
 
-        RCLCPP_INFO(get_logger(), "Vocabulary  : %s", vocab_path_.c_str());
-        RCLCPP_INFO(get_logger(), "Config      : %s", config_path_.c_str());
-        RCLCPP_INFO(get_logger(), "Visualize   : %s", visualize_ ? "yes" : "no");
+        RCLCPP_INFO(get_logger(), "Vocabulary      : %s", vocab_path_.c_str());
+        RCLCPP_INFO(get_logger(), "Config          : %s", config_path_.c_str());
+        RCLCPP_INFO(get_logger(), "Visualize       : %s", visualize_ ? "yes" : "no");
+        RCLCPP_INFO(get_logger(), "PnP mode        : %s", use_weighted_pnp_ ? "weighted" : "standard (OpenCV)");
 
         pose_pub_ = create_publisher<geometry_msgs::msg::Pose>("/relocalization/pose", 10);
 
@@ -125,9 +128,10 @@ public:
         csv_log_.open("comparison_log.csv");
         if (csv_log_.is_open())
         {
-            csv_log_ << "frame,std_inliers,std_total,std_reproj_px,"
-                     << "wpnp_inliers,wpnp_total,wpnp_reproj_px,wpnp_weighted_cost,"
-                     << "pose_delta_m,wpnp_iterations\n";
+            csv_log_ << "frame,timestamp,"
+                     << "std_x,std_y,std_z,std_inliers,std_total,std_reproj_px,"
+                     << "wpnp_x,wpnp_y,wpnp_z,wpnp_inliers,wpnp_total,wpnp_reproj_px,"
+                     << "wpnp_weighted_cost,pose_delta_m,wpnp_iterations\n";
             RCLCPP_INFO(get_logger(), "CSV log: comparison_log.csv");
         }
 
@@ -157,12 +161,14 @@ public:
             rclcpp::spin_some(shared_from_this());
 
             cv::Mat frame;
+            double  frame_timestamp = 0.0;
             {
                 std::lock_guard<std::mutex> lock(frame_mutex_);
                 if (!has_new_frame_)
                     continue;
-                frame = latest_frame_.clone();
-                has_new_frame_ = false;
+                frame           = latest_frame_.clone();
+                frame_timestamp = latest_frame_stamp_;
+                has_new_frame_  = false;
             }
 
             frame_count++;
@@ -205,20 +211,23 @@ public:
             }
 
             // ── Weighted PnP (only when landmarks are detected) ───────────────
+            Relocalization::WeightedPnPResult wpnp;
+            wpnp.success                 = false;
+            wpnp.position                = {0.0f, 0.0f, 0.0f};
+            wpnp.numInliers              = 0;
+            wpnp.totalCorrespondences    = 0;
+            wpnp.meanReprojectionError   = 0.0f;
+            wpnp.weightedReprojectionError = 0.0f;
+            wpnp.iterations              = 0;
+
             if (!result.matched2DPoints.empty() && !result.matched3DPoints.empty()
                 && !result.landmarkRegions.empty())
             {
                 std::vector<float> weights = reloc_->assignWeightsFromLandmarks(
                     result.matched2DPoints, result.landmarkRegions, 1.0f, 0.3f);
 
-                Relocalization::WeightedPnPResult wpnp = reloc_->solvePnPWeighted(
+                wpnp = reloc_->solvePnPWeighted(
                     result.matched3DPoints, result.matched2DPoints, weights);
-
-                float std_reproj = result.success
-                    ? reloc_->computeMeanReprojError(
-                        result.matched3DPoints, result.matched2DPoints,
-                        result.rvec, result.tvec)
-                    : -1.0f;
 
                 if (wpnp.success)
                 {
@@ -229,23 +238,18 @@ public:
 
                     RCLCPP_INFO(get_logger(),
                         "[WeightedPnP] inliers=%d/%d  reproj=%.3fpx  "
-                        "[StandardPnP] inliers=%d/%d  reproj=%.3fpx  "
+                        "[StandardPnP] inliers=%d/%d  "
                         "pose_delta=%.4fm  wpnp_iters=%d",
                         wpnp.numInliers, wpnp.totalCorrespondences,
                         wpnp.meanReprojectionError,
                         result.numInliers, result.totalMatches,
-                        std_reproj, pose_delta, wpnp.iterations);
+                        pose_delta, wpnp.iterations);
 
-                    if (csv_log_.is_open())
+                    if (use_weighted_pnp_)
                     {
-                        csv_log_ << frame_count << ","
-                                 << result.numInliers << "," << result.totalMatches << ","
-                                 << std::fixed << std::setprecision(4) << std_reproj << ","
-                                 << wpnp.numInliers << "," << wpnp.totalCorrespondences << ","
-                                 << wpnp.meanReprojectionError << ","
-                                 << wpnp.weightedReprojectionError << ","
-                                 << pose_delta << "," << wpnp.iterations << "\n";
-                        csv_log_.flush();
+                        result.position = wpnp.position;
+                        result.rvec     = wpnp.rvec.clone();
+                        result.tvec     = wpnp.tvec.clone();
                     }
                 }
                 else
@@ -253,6 +257,33 @@ public:
                     RCLCPP_WARN(get_logger(),
                         "[WeightedPnP] failed — standard PnP result kept");
                 }
+            }
+
+            // ── CSV: one row per successfully localized frame ─────────────────
+            if (result.success && csv_log_.is_open())
+            {
+                float std_reproj = reloc_->computeMeanReprojError(
+                    result.matched3DPoints, result.matched2DPoints,
+                    result.rvec, result.tvec);
+
+                float dx = wpnp.position.x - result.position.x;
+                float dy = wpnp.position.y - result.position.y;
+                float dz = wpnp.position.z - result.position.z;
+                float pose_delta = wpnp.success
+                    ? std::sqrt(dx*dx + dy*dy + dz*dz) : 0.0f;
+
+                csv_log_ << frame_count << ","
+                         << std::fixed << std::setprecision(6) << frame_timestamp << ","
+                         << result.position.x << "," << result.position.y << "," << result.position.z << ","
+                         << result.numInliers << "," << result.totalMatches << ","
+                         << std::setprecision(4) << std_reproj << ","
+                         << std::setprecision(6)
+                         << wpnp.position.x << "," << wpnp.position.y << "," << wpnp.position.z << ","
+                         << wpnp.numInliers << "," << wpnp.totalCorrespondences << ","
+                         << std::setprecision(4) << wpnp.meanReprojectionError << ","
+                         << wpnp.weightedReprojectionError << ","
+                         << pose_delta << "," << wpnp.iterations << "\n";
+                csv_log_.flush();
             }
 
             if (result.success)
@@ -437,8 +468,9 @@ private:
         {
             auto cv_img = cv_bridge::toCvCopy(msg, "bgr8");
             std::lock_guard<std::mutex> lock(frame_mutex_);
-            latest_frame_  = cv_img->image;
-            has_new_frame_ = true;
+            latest_frame_       = cv_img->image;
+            latest_frame_stamp_ = rclcpp::Time(msg->header.stamp).seconds();
+            has_new_frame_      = true;
         }
         catch (const cv_bridge::Exception &e)
         {
@@ -499,6 +531,7 @@ private:
     std::string vocab_path_;
     std::string config_path_;
     bool        visualize_;
+    bool        use_weighted_pnp_;
     bool        ready_;
 
     std::unique_ptr<Relocalization::RelocalizationModule> reloc_;
@@ -508,6 +541,7 @@ private:
 
     // Camera frame (populated by imageCallback)
     cv::Mat    latest_frame_;
+    double     latest_frame_stamp_{0.0};
     bool       has_new_frame_{false};
     std::mutex frame_mutex_;
 

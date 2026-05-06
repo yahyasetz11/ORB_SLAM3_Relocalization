@@ -11,12 +11,14 @@ class CameraNode(Node):
     def __init__(self):
         super().__init__('camera_node')
 
-        self.declare_parameter('video_path', '')   # empty = webcam
+        self.declare_parameter('video_path', '')        # empty = webcam
         self.declare_parameter('camera_id', 0)
+        self.declare_parameter('timestamp_start', 0.0)  # 0.0 = use ROS wall clock
 
         video_path = os.path.expanduser(
             self.get_parameter('video_path').get_parameter_value().string_value)
-        camera_id  = self.get_parameter('camera_id').get_parameter_value().integer_value
+        camera_id        = self.get_parameter('camera_id').get_parameter_value().integer_value
+        timestamp_start  = self.get_parameter('timestamp_start').get_parameter_value().double_value
 
         if video_path:
             self.cap = cv2.VideoCapture(video_path)
@@ -31,12 +33,20 @@ class CameraNode(Node):
 
         # Publish at source FPS; fall back to 30 if unavailable
         src_fps = self.cap.get(cv2.CAP_PROP_FPS)
-        fps = src_fps if src_fps > 0 else 30.0
-        self.get_logger().info(f'Publishing at {fps:.1f} fps on /camera/image_raw')
+        self._fps = src_fps if src_fps > 0 else 30.0
+        self.get_logger().info(f'Publishing at {self._fps:.1f} fps on /camera/image_raw')
+
+        self._timestamp_start = timestamp_start
+        self._frame_index = 0
+        if timestamp_start > 0.0:
+            self.get_logger().info(
+                f'Timestamp mode: TUM-aligned  start={timestamp_start:.6f}')
+        else:
+            self.get_logger().info('Timestamp mode: ROS wall clock')
 
         self.bridge = CvBridge()
         self.pub = self.create_publisher(Image, '/camera/image_raw', 10)
-        self.timer = self.create_timer(1.0 / fps, self.publish_frame)
+        self.timer = self.create_timer(1.0 / self._fps, self.publish_frame)
 
     def publish_frame(self):
         ret, frame = self.cap.read()
@@ -47,7 +57,15 @@ class CameraNode(Node):
 
         frame = cv2.resize(frame, (640, 480))
         msg = self.bridge.cv2_to_imgmsg(frame, 'bgr8')
-        msg.header.stamp = self.get_clock().now().to_msg()
+
+        if self._timestamp_start > 0.0:
+            t = self._timestamp_start + self._frame_index / self._fps
+            msg.header.stamp.sec     = int(t)
+            msg.header.stamp.nanosec = int((t % 1.0) * 1e9)
+        else:
+            msg.header.stamp = self.get_clock().now().to_msg()
+
+        self._frame_index += 1
         msg.header.frame_id = 'camera'
         self.pub.publish(msg)
 
