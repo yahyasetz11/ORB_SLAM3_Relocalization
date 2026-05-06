@@ -10,3 +10,13 @@ error.txt
 docs/superpowers/
 CLAUDE.md
 *.csv
+
+# OSA map files are too large for git — keep the folder, ignore the files
+src/navigation/tools/osa_files/*.osa
+
+# Root tools build artifacts
+tools/map_to_csv/build/
+
+# Python cache and editor swap files
+__pycache__/
+*.swp

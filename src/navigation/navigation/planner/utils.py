@@ -384,8 +384,8 @@ def draw_path(
     show_path: bool = True,
     path_color: tuple = (60, 179, 113),
     outline_color: tuple = (255, 255, 255),
-    path_thickness: int = 4,
-    outline_thickness: int = 7,
+    path_thickness: int = 2,
+    outline_thickness: int = 4,
     arrow_color: tuple = (0, 165, 255),
     arrow_interval: int = 30,
     arrow: bool = True,
@@ -419,12 +419,12 @@ def draw_target(
     img: NDArray,
     coords: PixelCoords,
     color: tuple = (0, 0, 255),
-    radius: int = 5,
+    radius: int = 3,
 ) -> NDArray:
     out = img.copy()
     center = (coords.x_coords, coords.y_coords)
     cv2.circle(out, center, radius, color, thickness=-1)
-    cv2.circle(out, center, radius + 2, color, thickness=1)
+    cv2.circle(out, center, radius + 1, color, thickness=1)
     return out
 
 # ======================================================

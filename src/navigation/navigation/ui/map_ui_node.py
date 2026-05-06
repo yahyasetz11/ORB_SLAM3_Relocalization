@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # navigation/ui/map_ui_node.py
 
 # ─── Standard library ────────────────────────────────────────────────────────
@@ -13,6 +14,7 @@ from rclpy.node import Node
 # ─── ROS messages ────────────────────────────────────────────────────────────
 from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 
 # ─── CvBridge ────────────────────────────────────────────────────────────────
 from cv_bridge import CvBridge
@@ -53,6 +55,21 @@ from navigation.ui.ui_utils import (
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Clickable map label
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ClickableMapLabel(QLabel):
+    def __init__(self, on_click, parent=None):
+        super().__init__(parent)
+        self._on_click = on_click
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._on_click(event.x(), event.y(), self.width(), self.height())
+        super().mousePressEvent(event)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Signal bridge
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -78,20 +95,24 @@ class MapUINode(Node):
         self.bridge = CvBridge()
         self.current_img: Optional[NDArray] = None
         self.current_position: Optional[PointStamped] = None
-        self.locations: Dict[str, Any] = {}
         self._first_image    = True   # show one-shot status when first frame arrives
         self._first_position = True   # show one-shot status when first position arrives
 
-        # ── Load named locations ──────────────────────────────────────────────
-        try:
-            pkg_share = get_package_share_directory('navigation')
-            locations_file = os.path.join(pkg_share, 'config', 'locations.yaml')
-            self.locations = load_locations(locations_file)
-            self.get_logger().info(
-                f'Loaded {len(self.locations)} location(s) from {locations_file}'
-            )
-        except Exception as exc:
-            self.get_logger().warn(f'Could not load locations.yaml: {exc}')
+        # ── Map directory ─────────────────────────────────────────────────────
+        self.map_dir = os.path.join(
+            get_package_share_directory('navigation'), 'maps'
+        )
+        # self.map_dir = os.path.join(
+        #     os.path.expanduser("~"),
+        #     "ORB_SLAM3_Relocalization",
+        #     "src", "navigation", "navigation", "maps"
+        # )
+
+        # ── Map dimension params ──────────────────────────────────────────────
+        self.declare_parameter('map_width_meters', 50.0)
+        self.declare_parameter('map_height_meters', 50.0)
+        self.map_width_meters  = self.get_parameter('map_width_meters').get_parameter_value().double_value
+        self.map_height_meters = self.get_parameter('map_height_meters').get_parameter_value().double_value
 
         # ── ROS subscribers ───────────────────────────────────────────────────
         self.image_sub = self.create_subscription(
@@ -101,8 +122,9 @@ class MapUINode(Node):
             PointStamped, 'current_position', self.position_callback, 10)
 
         # ── ROS publishers ────────────────────────────────────────────────────
-        self.start_pub = self.create_publisher(PointStamped, 'start_position', 10)
-        self.goal_pub  = self.create_publisher(PointStamped, 'goal_position',  10)
+        self.start_pub    = self.create_publisher(PointStamped, 'start_position', 10)
+        self.goal_pub     = self.create_publisher(PointStamped, 'goal_position',  10)
+        self.map_name_pub = self.create_publisher(String, '/map_name', 10)
 
         # ── Build UI ──────────────────────────────────────────────────────────
         self._init_ui()
@@ -121,35 +143,38 @@ class MapUINode(Node):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(6)
 
-        # ── Top bar: search + go + dropdown ──────────────────────────────────
+        # ── Top bar: map selector + manual load ───────────────────────────────
         top_bar = QHBoxLayout()
 
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText('Search location…')
-        self.search_box.setStyleSheet(
+        self.map_combo = QComboBox()
+        self.map_combo.setStyleSheet('padding: 4px; background: #2d2d2d; color: white;')
+        self.map_combo.addItem('── Select map ──')
+        if os.path.isdir(self.map_dir):
+            for f in sorted(os.listdir(self.map_dir)):
+                if f.endswith('.png'):
+                    self.map_combo.addItem(f[:-4])
+        self.map_combo.currentTextChanged.connect(self._on_map_selected)
+
+        self.map_name_input = QLineEdit()
+        self.map_name_input.setPlaceholderText('Map name…')
+        self.map_name_input.setStyleSheet(
             'padding: 4px; background: #2d2d2d; color: white; border: 1px solid #555;'
         )
-        self.search_box.returnPressed.connect(self._on_search)
+        self.map_name_input.returnPressed.connect(self._on_load_map)
 
-        go_btn = QPushButton('Go')
-        go_btn.setFixedWidth(50)
-        go_btn.setStyleSheet('padding: 4px; background: #0078d4; color: white; border: none;')
-        go_btn.clicked.connect(self._on_search)
+        load_btn = QPushButton('Load')
+        load_btn.setFixedWidth(50)
+        load_btn.setStyleSheet('padding: 4px; background: #0078d4; color: white; border: none;')
+        load_btn.clicked.connect(self._on_load_map)
 
-        self.location_combo = QComboBox()
-        self.location_combo.setStyleSheet('padding: 4px; background: #2d2d2d; color: white;')
-        self.location_combo.addItem('── Select location ──')
-        for name in get_location_names(self.locations):
-            self.location_combo.addItem(name)
-        self.location_combo.currentTextChanged.connect(self._on_location_selected)
-
-        top_bar.addWidget(self.search_box, stretch=3)
-        top_bar.addWidget(go_btn)
-        top_bar.addWidget(self.location_combo, stretch=2)
+        top_bar.addWidget(self.map_combo, stretch=2)
+        top_bar.addWidget(self.map_name_input, stretch=3)
+        top_bar.addWidget(load_btn)
         root.addLayout(top_bar)
 
         # ── Map display ───────────────────────────────────────────────────────
-        self.map_label = QLabel('Waiting for map image…')
+        self.map_label = ClickableMapLabel(self._on_map_click)
+        self.map_label.setText('Waiting for map image…')
         self.map_label.setAlignment(Qt.AlignCenter)
         self.map_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.map_label.setScaledContents(True)
@@ -168,11 +193,7 @@ class MapUINode(Node):
 
         self._window.show()
 
-        n = len(self.locations)
-        if n:
-            self.show_status(f'[INIT] {n} location(s) loaded — ready', 'success')
-        else:
-            self.show_status('[INIT] No locations loaded — check config/locations.yaml', 'error')
+        self.show_status('[INIT] Ready — select or load a map', 'info')
 
     # ── ROS callbacks ─────────────────────────────────────────────────────────
 
@@ -205,58 +226,48 @@ class MapUINode(Node):
         
         self.map_label.setPixmap(cv_to_pixmap(base))
 
-    def _on_search(self):
-        query = self.search_box.text().strip()
-        if not query:
-            return
-        result = search_location(self.locations, query)
-        if result is None:
-            self.show_status(f'[SEARCH] No match for "{query}"', 'error')
-            return
-        name, loc = result
-        self.show_status(f'[SEARCH] Found "{name}" — navigating…', 'info')
-        self._publish_goal_and_navigate(name, loc)
-
-    def _on_location_selected(self, name: str):
+    def _on_map_selected(self, name: str):
         if name.startswith('──'):
             return
-        result = search_location(self.locations, name)
-        if result is None:
-            self.show_status(f'[DROPDOWN] "{name}" not found in locations', 'error')
-            return
-        _, loc = result
-        self._publish_goal_and_navigate(name, loc)
+        name_msg = String()
+        name_msg.data = name
+        self.map_name_pub.publish(name_msg)
+        self.show_status(f'[MAP] Loading "{name}"…', 'info')
 
-    def _publish_goal_and_navigate(self, name: str, loc: Dict[str, Any]):
-        if self.current_position is None:
-            self.show_status('[NAV] No position yet — waiting for current_position', 'error')
+    def _on_load_map(self):
+        name = self.map_name_input.text().strip()
+        if not name:
             return
+        png_exists = os.path.isfile(os.path.join(self.map_dir, f'{name}.png'))
+        csv_exists = os.path.isfile(os.path.join(self.map_dir, f'{name}.csv'))
+        if not png_exists and not csv_exists:
+            self.show_status(f'[MAP] Map "{name}" not found — no .png or .csv', 'error')
+            return
+        name_msg = String()
+        name_msg.data = name
+        self.map_name_pub.publish(name_msg)
+        if not png_exists:
+            self.show_status(f'[MAP] Building "{name}" from CSV…', 'info')
+        else:
+            self.show_status(f'[MAP] Loading "{name}"…', 'info')
 
+    def _on_map_click(self, px, py, img_w, img_h):
+        if img_w == 0 or img_h == 0:
+            return
+        if self.current_img is None:
+            self.show_status('[GOAL] No map loaded yet', 'warn')
+            return
+        map_h, map_w = self.current_img.shape[:2]
+        goal_x = int((px / img_w) * map_w)
+        goal_y = int((py / img_h) * map_h)
         now = self.get_clock().now().to_msg()
-
-        sx = self.current_position.point.x
-        sy = self.current_position.point.y
-        gx = float(loc['x'])
-        gy = float(loc['y'])
-
-        start_msg = PointStamped()
-        start_msg.header.stamp    = now
-        start_msg.header.frame_id = 'map'
-        start_msg.point.x         = sx
-        start_msg.point.y         = sy
-        self.start_pub.publish(start_msg)
-
         goal_msg = PointStamped()
         goal_msg.header.stamp    = now
         goal_msg.header.frame_id = 'map'
-        goal_msg.point.x         = gx
-        goal_msg.point.y         = gy
+        goal_msg.point.x         = float(goal_x)
+        goal_msg.point.y         = float(goal_y)
         self.goal_pub.publish(goal_msg)
-
-        self.show_status(
-            f'[NAV] → "{name}"  goal ({gx:.2f}, {gy:.2f})  from ({sx:.2f}, {sy:.2f})',
-            'success'
-        )
+        self.show_status(f'[GOAL] Set goal ({goal_x}, {goal_y}) px', 'success')
 
     # ── Status bar ────────────────────────────────────────────────────────────
 

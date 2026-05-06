@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # navigation/navigation/main.py
 
 import numpy as np
@@ -7,15 +8,15 @@ import rclpy
 from rclpy.node import Node
 from cv_bridge import CvBridge
 
-from nav_msgs.msg import OccupancyGrid, Path
+from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped, PointStamped
 from sensor_msgs.msg import Image
 from collections import deque
-from typing import List
+from typing import List, Optional
 
 from navigation.planner.a_star import AStarImplementation
 from navigation.planner.primitives import PixelCoords, PathNode
-from navigation.planner.utils import smooth_path_generation, draw_path, draw_target, world_to_pixel, pixel_to_world, euclidean_distance
+from navigation.planner.utils import smooth_path_generation, draw_path, draw_target, pixel_to_world, euclidean_distance
 
 
 class NavigationNode(Node):
@@ -24,9 +25,7 @@ class NavigationNode(Node):
 
         # Subscriptions
         self.map_sub = self.create_subscription(
-            OccupancyGrid, 'world_map', self.map_callback, 10)
-        self.start_sub = self.create_subscription(
-            PointStamped, 'start_position', self.start_callback, 10)
+            Image, '/map_image', self.map_callback, 10)
         self.goal_sub = self.create_subscription(
             PointStamped, 'goal_position', self.goal_callback, 10)
         self.position_sub = self.create_subscription(
@@ -40,9 +39,8 @@ class NavigationNode(Node):
         self.path_pub = self.create_publisher(Path, 'smooth_path', 10)
 
         # State
-        self.current_position = None   
+        self.current_position = None
         self.world_map = None
-        self.map_info = None
         self.start_coords = None
         self.goal_coords = None
         self.smooth_path = None
@@ -55,43 +53,59 @@ class NavigationNode(Node):
 
     # ── Subscribers ────────────────────────────────────────────────────────────
 
-    def map_callback(self, msg: OccupancyGrid):
-        self.map_info = msg.info
-        self.raw_map_data = msg   # store the whole message
-        self.build_base()      # let build_base do the processing
+    def map_callback(self, msg: Image):
+        img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+
+        # convert to binary grid for A*
+        # white (255) = wall = 1, black (0) = free = 0
+        grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(grey, 127, 1, cv2.THRESH_BINARY_INV)
+        self.world_map = binary
+
+        # store visual base layers
+        self.static_base = img.copy()
+        self.path_base = self.static_base.copy()
+
+        # publish static base
+        ros_base_img = self.bridge.cv2_to_imgmsg(self.static_base, encoding='bgr8')
+        ros_base_img.header.stamp = self.get_clock().now().to_msg()
+        ros_base_img.header.frame_id = 'map'
+        self.static_image_pub.publish(ros_base_img)
+
+        # replan first so path_base is redrawn before pushing to UI,
+        # otherwise the UI flashes a blank map on every 1Hz map update
         self.try_plan()
 
-    def start_callback(self, msg: PointStamped):
-        if self.map_info is None:
-            self.get_logger().warn('Map not received yet, ignoring start position.')
-            return
-        self.start_coords = world_to_pixel(msg.point.x, msg.point.y, self.map_info)
-        self.try_plan()
+        self.publish_trails()
 
     def goal_callback(self, msg: PointStamped):
-        if self.map_info is None:
-            self.get_logger().warn('Map not received yet, ignoring goal position.')
+        if self.world_map is None:
+            self.get_logger().warn('Map not received yet, ignoring goal.')
             return
-        self.goal_coords = world_to_pixel(msg.point.x, msg.point.y, self.map_info)
+        if self.current_position is None:
+            self.get_logger().warn('No position yet, ignoring goal.')
+            return
+        coords = PixelCoords(int(msg.point.x), int(msg.point.y))
+        snapped = self.snap_to_free(coords)
+        if snapped is None:
+            self.get_logger().warn('No free cell near goal — ignoring.')
+            return
+        self.goal_coords = snapped
+        self.start_coords = self.current_position
         self.try_plan()
-    
-    def position_callback(self, msg: PointStamped):
-        if self.map_info is None:
-            return
 
-        # convert world coordinates to pixel coordinates
-        self.current_position = world_to_pixel(
-            msg.point.x,
-            msg.point.y,
-            self.map_info
-        )
+    def position_callback(self, msg: PointStamped):
+        if self.world_map is None:
+            return
+        self.current_position = PixelCoords(int(msg.point.x), int(msg.point.y))
 
         # update trail and publish new frame
         self.publish_trails(self.current_position)
 
         # check if robot has deviated from planned path
         if self.check_deviation(self.current_position):
-            self.get_logger().info('Deviation detected — replanning...')
+            self.get_logger().info('Deviation detected — replanning from current position...')
+            self.start_coords = self.current_position
             self.try_plan()
 
     # ── Planning ───────────────────────────────────────────────────────────────
@@ -118,31 +132,10 @@ class NavigationNode(Node):
             self.get_logger().warn('Path smoothing returned empty path.')
             return
 
-        self.publish_path()
         self.draw_planned_path()
 
     # ── visualization (publisher) ─────────────────────────────────────────────────────────────
 
-    def build_base(self):
-        # 1. process raw occupancy grid
-        w, h = self.map_info.width, self.map_info.height
-        data = np.array(self.raw_map_data.data, dtype=np.int8).reshape((h, w))
-        self.world_map = np.where(data > 50, 1, 0).astype(np.uint8)
-
-        # 2. render grey BGR image
-        grey = np.where(self.world_map == 0, 220, 40).astype(np.uint8)
-        self.static_base = np.stack([grey] * 3, axis=-1)
-
-        # 3. initialize path_base so it's never None
-        self.path_base = self.static_base.copy()
-
-        # 4. publish
-        ros_base_img = self.bridge.cv2_to_imgmsg(self.static_base, encoding='bgr8')
-        ros_base_img.header.stamp = self.get_clock().now().to_msg()
-        ros_base_img.header.frame_id = 'map'
-        self.static_image_pub.publish(ros_base_img)
-        
-    
     def draw_planned_path(self):
         # called from try_plan() when A* produces a path
         # clones self.static_base (start fresh, no old path)
@@ -155,9 +148,9 @@ class NavigationNode(Node):
         self.path_base = draw_path(base_img, self.smooth_path, arrow=False)
         
         if self.start_coords is not None:
-            self.path_base = draw_target(self.path_base, self.start_coords, color=(0, 255, 0))
+            self.path_base = draw_target(self.path_base, self.start_coords, color=(0, 255, 0), radius=4)
         if self.goal_coords is not None:
-            self.path_base = draw_target(self.path_base, self.goal_coords, color=(0, 0, 255))
+            self.path_base = draw_target(self.path_base, self.goal_coords, color=(0, 0, 255), radius=4)
             
         ros_path_img = self.bridge.cv2_to_imgmsg(self.path_base, encoding='bgr8')
         ros_path_img.header.stamp = self.get_clock().now().to_msg()
@@ -176,9 +169,9 @@ class NavigationNode(Node):
         if len(self.trail) >= 2:
             points = np.array(list(self.trail), dtype=np.int32).reshape((-1, 1, 2))
             cv2.polylines(path_base_img, [points], isClosed=False, color=(200, 200, 200), thickness=2)
-        
+
         if current_position is not None:
-            cv2.circle(path_base_img, (current_position.x_coords, current_position.y_coords), radius=6, color=(0, 255, 255), thickness=-1)
+            cv2.circle(path_base_img, (current_position.x_coords, current_position.y_coords), radius=4, color=(0, 255, 255), thickness=-1)
         
         ros_trail_img = self.bridge.cv2_to_imgmsg(path_base_img, encoding='bgr8')
         ros_trail_img.header.stamp = self.get_clock().now().to_msg()
@@ -205,7 +198,19 @@ class NavigationNode(Node):
 
         self.path_pub.publish(path_msg)
         
-    def check_deviation(self, current_position, threshold=25) -> bool:
+    def snap_to_free(self, coords: PixelCoords, search_radius: int = 20) -> Optional[PixelCoords]:
+        for r in range(1, search_radius):
+            for dx in range(-r, r+1):
+                for dy in range(-r, r+1):
+                    nx = coords.x_coords + dx
+                    ny = coords.y_coords + dy
+                    if 0 <= nx < self.world_map.shape[1] and \
+                       0 <= ny < self.world_map.shape[0] and \
+                       self.world_map[ny, nx] == 0:
+                        return PixelCoords(nx, ny)
+        return None
+
+    def check_deviation(self, current_position, threshold=10) -> bool:
         if self.smooth_path is None:
             return False
         min_distance = float('inf')

@@ -13,7 +13,8 @@ setup(
         ('share/' + package_name + '/config',
             ['navigation/config/locations.yaml']),
         ('share/' + package_name + '/launch',
-            ['launch/test_navigation.launch.py']),
+            ['launch/test_navigation.launch.py',
+             'launch/nav.launch.py']),
     ],
     install_requires=['setuptools', 'numpy', 'opencv-python', 'cv_bridge'],
     zip_safe=True,
@@ -27,6 +28,7 @@ setup(
             'navigation = navigation.main:main',
             'navigation_ui = navigation.ui.map_ui_node:main',
             'fake_data_publisher = navigation.test.fake_data_publisher:main',
+            'map_publisher = navigation.map_constructor.map_publisher:main',
         ],
     },
 )

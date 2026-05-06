@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # TEST ONLY — remove before deployment
 
 # navigation/test/fake_data_publisher.py

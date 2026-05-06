@@ -12,7 +12,7 @@ class Planner():
         world_map:NDArray,
         start_coords:PixelCoords, goal_coords:PixelCoords,
         goal_threshold:float=3, iter_limit:int=10000,
-        inflation_radius:int=5,
+        inflation_radius:int=8,
         ):
         
         self.world_map = world_map.copy()
