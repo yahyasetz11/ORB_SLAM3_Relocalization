@@ -7,9 +7,22 @@ map frame and TUM's global motion-capture frame.  Alignment is fitted on the
 Standard PnP trajectory and the same transform is reused for Weighted PnP.
 
 Usage:
+    # Single pair (default files)
     python3 plot.py
-    python3 plot.py --csv comparison_log.csv --gt data/rgbd_dataset_freiburg3_long_office_household_validation/groundtruth.txt
-    python3 plot.py --no-align          # raw (unaligned) errors for comparison
+
+    # Single pair (explicit)
+    python3 plot.py --csv run1.csv --gt groundtruth.txt --labels "Run 1"
+
+    # Multiple pairs on the same plot
+    python3 plot.py \\
+        --csv run1.csv run2.csv run3.csv \\
+        --gt  gt1.txt  gt2.txt  gt3.txt \\
+        --labels "w=1.0/0.3" "w=1.0/0.5" "w=1.0/0.7"
+
+    # Skip Umeyama (show raw coordinate-frame error)
+    python3 plot.py --no-align
+
+    # Save instead of showing
     python3 plot.py --save error_comparison.png
 """
 
@@ -27,6 +40,16 @@ GROUNDTRUTH_DEFAULT = (
 )
 CSV_DEFAULT = "comparison_log.csv"
 
+# Color palette: each pair gets one base color; std=solid, wpnp=dashed
+PAIR_COLORS = [
+    "#2196F3",  # blue
+    "#F44336",  # red
+    "#4CAF50",  # green
+    "#FF9800",  # orange
+    "#9C27B0",  # purple
+    "#00BCD4",  # cyan
+]
+
 
 def load_groundtruth(path: str) -> pd.DataFrame:
     gt = pd.read_csv(
@@ -38,7 +61,6 @@ def load_groundtruth(path: str) -> pd.DataFrame:
 
 
 def match_timestamps(query_ts: np.ndarray, gt_ts: np.ndarray) -> np.ndarray:
-    """Return index into gt_ts closest to each query timestamp."""
     return np.array([np.argmin(np.abs(gt_ts - ts)) for ts in query_ts])
 
 
@@ -58,7 +80,6 @@ def umeyama_alignment(src: np.ndarray, dst: np.ndarray):
     H = src_c.T @ dst_c / len(src)
 
     U, S, Vt = svd(H)
-    # Correct for reflection
     d = np.linalg.det(Vt.T @ U.T)
     D = np.diag([1.0, 1.0, d])
 
@@ -73,62 +94,50 @@ def apply_alignment(xyz: np.ndarray, scale: float, R: np.ndarray, t: np.ndarray)
 
 
 def translation_error(est: np.ndarray, ref: np.ndarray) -> np.ndarray:
-    """Euclidean distance per row between two (N,3) arrays."""
     return np.linalg.norm(est - ref, axis=1)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Plot PnP vs ground truth error")
-    parser.add_argument("--csv", default=CSV_DEFAULT)
-    parser.add_argument("--gt",  default=GROUNDTRUTH_DEFAULT)
-    parser.add_argument("--save", default=None, help="Save figure to this path instead of showing")
-    parser.add_argument("--max-ts-diff", type=float, default=0.05,
-                        help="Reject matches where |timestamp - gt_timestamp| > this value (s)")
-    parser.add_argument("--no-align", action="store_true",
-                        help="Skip Umeyama alignment (shows raw coordinate-frame error)")
-    args = parser.parse_args()
-
-    # ── Load data ─────────────────────────────────────────────────────────────
+def process_pair(csv_path, gt_path, no_align, max_ts_diff, label):
+    """Load, match, align, and compute errors for one CSV/GT pair."""
     try:
-        csv = pd.read_csv(args.csv)
+        csv = pd.read_csv(csv_path)
     except FileNotFoundError:
-        sys.exit(f"CSV not found: {args.csv}")
+        sys.exit(f"CSV not found: {csv_path}")
 
     try:
-        gt = load_groundtruth(args.gt)
+        gt = load_groundtruth(gt_path)
     except FileNotFoundError:
-        sys.exit(f"Ground truth not found: {args.gt}")
+        sys.exit(f"Ground truth not found: {gt_path}")
 
     required = {"timestamp", "std_x", "std_y", "std_z", "wpnp_x", "wpnp_y", "wpnp_z"}
     if not required.issubset(csv.columns):
-        sys.exit(f"CSV is missing columns. Expected: {required}\nGot: {set(csv.columns)}")
+        sys.exit(f"[{label}] CSV missing columns. Expected: {required}\nGot: {set(csv.columns)}")
 
-    print(f"Loaded {len(csv)} localized frames from {args.csv}")
-    print(f"Loaded {len(gt)} ground truth poses from {args.gt}")
+    print(f"\n── {label} ───────────────────────────────────────")
+    print(f"  CSV : {csv_path}  ({len(csv)} frames)")
+    print(f"  GT  : {gt_path}  ({len(gt)} poses)")
 
-    # ── Match timestamps ───────────────────────────────────────────────────────
     gt_ts  = gt["t"].to_numpy()
     csv_ts = csv["timestamp"].to_numpy()
     idx    = match_timestamps(csv_ts, gt_ts)
 
     ts_diff = np.abs(csv_ts - gt_ts[idx])
-    valid   = ts_diff <= args.max_ts_diff
+    valid   = ts_diff <= max_ts_diff
 
     if valid.sum() == 0:
         sys.exit(
-            f"No CSV timestamps matched within {args.max_ts_diff}s of any ground truth entry.\n"
-            "Check that timestamp_start in relocalization_params.yaml matches the ground truth file."
+            f"[{label}] No timestamps matched within {max_ts_diff}s.\n"
+            "Check timestamp_start in relocalization_params.yaml."
         )
 
-    print(f"Frames matched to ground truth: {valid.sum()}/{len(csv)}  "
-          f"(max timestamp diff: {ts_diff[valid].max():.4f}s)")
+    print(f"  Matched: {valid.sum()}/{len(csv)}  "
+          f"(max ts diff: {ts_diff[valid].max():.4f}s)")
 
-    csv_valid   = csv[valid].reset_index(drop=True)
-    gt_matched  = gt.iloc[idx[valid]].reset_index(drop=True)
-    gt_xyz      = gt_matched[["tx", "ty", "tz"]].to_numpy()
+    csv_valid  = csv[valid].reset_index(drop=True)
+    gt_matched = gt.iloc[idx[valid]].reset_index(drop=True)
+    gt_xyz     = gt_matched[["tx", "ty", "tz"]].to_numpy()
 
     std_xyz  = csv_valid[["std_x", "std_y", "std_z"]].to_numpy()
-
     wpnp_xyz = csv_valid[["wpnp_x", "wpnp_y", "wpnp_z"]].to_numpy()
     wpnp_ran = ~(
         (wpnp_xyz[:, 0] == 0.0) &
@@ -136,58 +145,108 @@ def main():
         (wpnp_xyz[:, 2] == 0.0)
     )
 
-    # ── Umeyama alignment ──────────────────────────────────────────────────────
-    align_label = ""
-    if not args.no_align:
+    if not no_align:
         scale, R, t = umeyama_alignment(std_xyz, gt_xyz)
         std_xyz_plot  = apply_alignment(std_xyz, scale, R, t)
         wpnp_xyz_plot = apply_alignment(wpnp_xyz, scale, R, t)
-        align_label   = " (Umeyama-aligned)"
-        print(f"\nUmeyama alignment  scale={scale:.4f}  "
-              f"t=[{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}]")
+        print(f"  Umeyama  scale={scale:.4f}  t=[{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}]")
     else:
         std_xyz_plot  = std_xyz
         wpnp_xyz_plot = wpnp_xyz
-        align_label   = " (raw — no alignment)"
 
-    # ── Compute errors ────────────────────────────────────────────────────────
     std_err  = translation_error(std_xyz_plot, gt_xyz)
     wpnp_err = translation_error(wpnp_xyz_plot[wpnp_ran], gt_xyz[wpnp_ran])
 
-    print(f"\nStandard PnP  — frames: {len(std_err):4d}  "
+    print(f"  Std PnP  — frames: {len(std_err):4d}  "
           f"mean: {std_err.mean():.4f}m  median: {np.median(std_err):.4f}m  "
           f"max: {std_err.max():.4f}m")
-    print(f"Weighted PnP  — frames: {wpnp_ran.sum():4d}  "
+    print(f"  WPnP     — frames: {wpnp_ran.sum():4d}  "
           f"mean: {wpnp_err.mean():.4f}m  median: {np.median(wpnp_err):.4f}m  "
           f"max: {wpnp_err.max():.4f}m")
 
-    # ── Plot ──────────────────────────────────────────────────────────────────
     timestamps_all  = csv_valid["timestamp"].to_numpy()
     timestamps_wpnp = timestamps_all[wpnp_ran]
 
-    fig, ax = plt.subplots(figsize=(12, 5))
+    return {
+        "label":           label,
+        "timestamps_std":  timestamps_all,
+        "timestamps_wpnp": timestamps_wpnp,
+        "std_err":         std_err,
+        "wpnp_err":        wpnp_err,
+    }
 
-    ax.plot(
-        timestamps_all, std_err,
-        color="#2196F3", linewidth=1.0, alpha=0.85,
-        label=f"Standard PnP (OpenCV)  mean={std_err.mean():.3f}m",
-    )
-    ax.plot(
-        timestamps_wpnp, wpnp_err,
-        color="#F44336", linewidth=1.0, alpha=0.85,
-        label=f"Weighted PnP            mean={wpnp_err.mean():.3f}m",
-    )
 
-    ax.axhline(std_err.mean(),  color="#2196F3", linestyle="--", linewidth=0.8, alpha=0.5)
-    ax.axhline(wpnp_err.mean(), color="#F44336", linestyle="--", linewidth=0.8, alpha=0.5)
+def main():
+    parser = argparse.ArgumentParser(description="Plot PnP vs ground truth error")
+    parser.add_argument("--csv",    nargs="+", default=[CSV_DEFAULT],
+                        metavar="CSV",
+                        help="One or more CSV log files")
+    parser.add_argument("--gt",     nargs="+", default=[GROUNDTRUTH_DEFAULT],
+                        metavar="GT",
+                        help="One or more ground truth files (must match --csv count)")
+    parser.add_argument("--labels", nargs="+", default=None,
+                        metavar="LABEL",
+                        help="Legend labels for each pair (defaults to CSV filename)")
+    parser.add_argument("--save",   default=None,
+                        help="Save figure to this path instead of showing")
+    parser.add_argument("--max-ts-diff", type=float, default=0.05,
+                        help="Reject matches where |timestamp - gt_timestamp| > this (s)")
+    parser.add_argument("--no-align", action="store_true",
+                        help="Skip Umeyama alignment (shows raw coordinate-frame error)")
+    args = parser.parse_args()
 
-    ax.set_xlabel("Timestamp (s)")
+    if len(args.csv) != len(args.gt):
+        sys.exit(f"--csv and --gt must have the same number of entries "
+                 f"(got {len(args.csv)} csv, {len(args.gt)} gt)")
+
+    labels = args.labels or [p.split("/")[-1].replace(".csv", "") for p in args.csv]
+    if len(labels) != len(args.csv):
+        sys.exit(f"--labels count ({len(labels)}) must match --csv count ({len(args.csv)})")
+
+    align_label = " (raw — no alignment)" if args.no_align else " (Umeyama-aligned)"
+
+    # ── Process all pairs ─────────────────────────────────────────────────────
+    results = [
+        process_pair(csv_path, gt_path, args.no_align, args.max_ts_diff, label)
+        for csv_path, gt_path, label in zip(args.csv, args.gt, labels)
+    ]
+
+    # ── Plot ──────────────────────────────────────────────────────────────────
+    # Use relative time (seconds from start of first sequence) so the x-axis
+    # shows a human-readable 0-based offset instead of raw Unix timestamps.
+    t0 = min(r["timestamps_std"][0] for r in results)
+
+    fig, ax = plt.subplots(figsize=(13, 5))
+
+    for i, r in enumerate(results):
+        color = PAIR_COLORS[i % len(PAIR_COLORS)]
+        label = r["label"]
+
+        ts_std  = r["timestamps_std"]  - t0
+        ts_wpnp = r["timestamps_wpnp"] - t0
+
+        ax.plot(
+            ts_std, r["std_err"],
+            color=color, linewidth=1.0, alpha=0.85, linestyle="-",
+            label=f"[{label}] Std PnP   mean={r['std_err'].mean():.3f}m",
+        )
+        ax.axhline(r["std_err"].mean(), color=color, linestyle="--",
+                   linewidth=0.8, alpha=0.4)
+
+        if len(r["wpnp_err"]) > 0:
+            ax.plot(
+                ts_wpnp, r["wpnp_err"],
+                color=color, linewidth=1.0, alpha=0.65, linestyle=":",
+                label=f"[{label}] WPnP      mean={r['wpnp_err'].mean():.3f}m",
+            )
+
+    ax.set_xlabel("Time from sequence start (s)")
     ax.set_ylabel("Translation error (m)")
     ax.set_title(
         f"Relocalization error vs TUM ground truth{align_label}\n"
-        "Standard PnP vs Weighted PnP"
+        "Standard PnP (solid) vs Weighted PnP (dotted)"
     )
-    ax.legend(loc="upper right")
+    ax.legend(loc="upper right", fontsize=8)
     ax.grid(True, alpha=0.3)
     ax.set_ylim(bottom=0)
 

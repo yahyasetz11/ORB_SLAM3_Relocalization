@@ -1110,13 +1110,16 @@ namespace Relocalization
     }
 
     // ── Semantic weight per YOLO class ID ────────────────────────────────────────
-    static float getSemanticWeight(int cls_id)
+    // All YOLO-detected objects get the same landmark weight (1.0).
+    // To give specific classes a different weight, add cases here.
+    static float getSemanticWeight(int /*cls_id*/)
     {
-        switch (cls_id)
-        {
-            case 164: return 1.0f;  // Door — highly permanent
-            default:  return 0.7f;  // Any other detected landmark
-        }
+        return 1.0f;
+        // switch (cls_id) {
+        //   case 39: return 0.8f;  // bottle — less permanent
+        //   case 56: return 1.0f;  // chair
+        //   default: return 1.0f;
+        // }
     }
 
     // ── 2×6 Jacobian of projection w.r.t. SE3 left perturbation ─────────────────
@@ -1125,24 +1128,24 @@ namespace Relocalization
         const Eigen::Vector3d &Pc, double fx, double fy)
     {
         double Xc = Pc(0), Yc = Pc(1), Zc = Pc(2);
-        double Zc_inv  = 1.0 / Zc;
+        double Zc_inv = 1.0 / Zc;
         double Zc_inv2 = Zc_inv * Zc_inv;
 
         Eigen::Matrix<double, 2, 6> J;
         // Row 0: ∂u/∂δξ = [∂u/∂t | ∂u/∂φ]
-        J(0, 0) =  fx * Zc_inv;
-        J(0, 1) =  0.0;
+        J(0, 0) = fx * Zc_inv;
+        J(0, 1) = 0.0;
         J(0, 2) = -fx * Xc * Zc_inv2;
         J(0, 3) = -fx * Xc * Yc * Zc_inv2;
-        J(0, 4) =  fx + fx * Xc * Xc * Zc_inv2;
+        J(0, 4) = fx + fx * Xc * Xc * Zc_inv2;
         J(0, 5) = -fx * Yc * Zc_inv;
         // Row 1: ∂v/∂δξ
-        J(1, 0) =  0.0;
-        J(1, 1) =  fy * Zc_inv;
+        J(1, 0) = 0.0;
+        J(1, 1) = fy * Zc_inv;
         J(1, 2) = -fy * Yc * Zc_inv2;
         J(1, 3) = -(fy + fy * Yc * Yc * Zc_inv2);
-        J(1, 4) =  fy * Xc * Yc * Zc_inv2;
-        J(1, 5) =  fy * Xc * Zc_inv;
+        J(1, 4) = fy * Xc * Yc * Zc_inv2;
+        J(1, 5) = fy * Xc * Zc_inv;
         return J;
     }
 
@@ -1152,7 +1155,8 @@ namespace Relocalization
         const std::vector<cv::Point2f> &points2D,
         const cv::Mat &rvec, const cv::Mat &tvec)
     {
-        if (points3D.empty()) return 0.0f;
+        if (points3D.empty())
+            return 0.0f;
         std::vector<cv::Point2f> projected;
         cv::projectPoints(points3D, rvec, tvec, mK, mDistCoef, projected);
         float total = 0.0f;
@@ -1204,7 +1208,7 @@ namespace Relocalization
         float inlierThresholdPx)
     {
         WeightedPnPResult result;
-        result.success    = false;
+        result.success = false;
         result.iterations = 0;
 
         const int n = (int)points3D.size();
@@ -1219,7 +1223,8 @@ namespace Relocalization
 
         // Normalize weights so mean = 1  (preserves relative weighting, stable Hessian scale)
         float w_sum = 0.0f;
-        for (float w : weights) w_sum += w;
+        for (float w : weights)
+            w_sum += w;
         float w_mean = w_sum / n;
         std::vector<double> w_norm(n);
         for (int i = 0; i < n; ++i)
@@ -1228,8 +1233,8 @@ namespace Relocalization
         // Warm-start with EPNP (avoids cold-start divergence)
         cv::Mat rvec_init, tvec_init;
         bool init_ok = cv::solvePnP(points3D, points2D, mK, mDistCoef,
-                                     rvec_init, tvec_init, false,
-                                     cv::SOLVEPNP_EPNP);
+                                    rvec_init, tvec_init, false,
+                                    cv::SOLVEPNP_EPNP);
         if (!init_ok)
         {
             rvec_init = cv::Mat::zeros(3, 1, CV_64F);
@@ -1240,8 +1245,10 @@ namespace Relocalization
         cv::Mat R_init;
         cv::Rodrigues(rvec_init, R_init);
         // Ensure R_init is CV_64F
-        if (R_init.type() != CV_64F) R_init.convertTo(R_init, CV_64F);
-        if (tvec_init.type() != CV_64F) tvec_init.convertTo(tvec_init, CV_64F);
+        if (R_init.type() != CV_64F)
+            R_init.convertTo(R_init, CV_64F);
+        if (tvec_init.type() != CV_64F)
+            tvec_init.convertTo(tvec_init, CV_64F);
 
         Eigen::Matrix3d R_e;
         Eigen::Vector3d t_e;
@@ -1254,8 +1261,8 @@ namespace Relocalization
         Sophus::SE3d T_cw(R_e, t_e);
 
         // Levenberg-Marquardt
-        double lambda    = 1e-3;
-        double cost      = std::numeric_limits<double>::max();
+        double lambda = 1e-3;
+        double cost = std::numeric_limits<double>::max();
 
         for (int iter = 0; iter < maxIterations; ++iter)
         {
@@ -1267,7 +1274,8 @@ namespace Relocalization
             {
                 Eigen::Vector3d Xw(points3D[i].x, points3D[i].y, points3D[i].z);
                 Eigen::Vector3d Pc = T_cw * Xw;
-                if (Pc(2) <= 0) continue;
+                if (Pc(2) <= 0)
+                    continue;
 
                 double u_proj = fx * Pc(0) / Pc(2) + cx;
                 double v_proj = fy * Pc(1) / Pc(2) + cy;
@@ -1296,8 +1304,8 @@ namespace Relocalization
 
             if (new_cost < cost)
             {
-                T_cw  = T_new;
-                cost  = new_cost;
+                T_cw = T_new;
+                cost = new_cost;
                 lambda /= 10.0;
             }
             else
@@ -1330,7 +1338,8 @@ namespace Relocalization
         {
             Eigen::Vector3d Xw(points3D[i].x, points3D[i].y, points3D[i].z);
             Eigen::Vector3d Pc = T_cw * Xw;
-            if (Pc(2) <= 0) continue;
+            if (Pc(2) <= 0)
+                continue;
             float u_proj = (float)(fx * Pc(0) / Pc(2) + cx);
             float v_proj = (float)(fy * Pc(1) / Pc(2) + cy);
             float du = points2D[i].x - u_proj;
@@ -1342,12 +1351,12 @@ namespace Relocalization
         if ((int)inliers.size() < mMinInliers)
             return result;
 
-        result.success               = true;
-        result.rvec                  = rvec_final.clone();
-        result.tvec                  = t_cv.clone();
-        result.numInliers            = (int)inliers.size();
-        result.totalCorrespondences  = n;
-        result.inlierIndices         = std::move(inliers);
+        result.success = true;
+        result.rvec = rvec_final.clone();
+        result.tvec = t_cv.clone();
+        result.numInliers = (int)inliers.size();
+        result.totalCorrespondences = n;
+        result.inlierIndices = std::move(inliers);
         result.weightedReprojectionError = (float)(cost / n);
         result.meanReprojectionError = computeMeanReprojError(
             points3D, points2D, rvec_final, t_cv);

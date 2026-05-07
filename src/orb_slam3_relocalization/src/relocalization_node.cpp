@@ -14,13 +14,15 @@
 #include <mutex>
 #include <map>
 #include <sstream>
-#include <cstdlib>  // getenv
+#include <cstdlib> // getenv
 
-static std::string expandPath(const std::string & path)
+static std::string expandPath(const std::string &path)
 {
-    if (path.empty() || path[0] != '~') return path;
-    const char * home = std::getenv("HOME");
-    if (!home) return path;
+    if (path.empty() || path[0] != '~')
+        return path;
+    const char *home = std::getenv("HOME");
+    if (!home)
+        return path;
     return std::string(home) + path.substr(1);
 }
 
@@ -75,14 +77,14 @@ class RelocalizationNode : public rclcpp::Node
 public:
     RelocalizationNode() : Node("relocalization_node"), ready_(false)
     {
-        declare_parameter("vocab_path",        "");
-        declare_parameter("config_path",       "");
-        declare_parameter("visualize",         true);
-        declare_parameter("use_weighted_pnp",  false);
+        declare_parameter("vocab_path", "");
+        declare_parameter("config_path", "");
+        declare_parameter("visualize", true);
+        declare_parameter("use_weighted_pnp", false);
 
-        vocab_path_       = expandPath(get_parameter("vocab_path").as_string());
-        config_path_      = expandPath(get_parameter("config_path").as_string());
-        visualize_        = get_parameter("visualize").as_bool();
+        vocab_path_ = expandPath(get_parameter("vocab_path").as_string());
+        config_path_ = expandPath(get_parameter("config_path").as_string());
+        visualize_ = get_parameter("visualize").as_bool();
         use_weighted_pnp_ = get_parameter("use_weighted_pnp").as_bool();
 
         if (vocab_path_.empty() || config_path_.empty())
@@ -151,7 +153,7 @@ public:
 
         const cv::Size displaySize = reloc_->getDisplaySize();
         const cv::Size processSize = reloc_->getProcessSize();
-        const float    kpScale     = (float)displaySize.width / processSize.width;
+        const float kpScale = (float)displaySize.width / processSize.width;
 
         int frame_count = 0;
 
@@ -163,14 +165,14 @@ public:
             rclcpp::spin_some(shared_from_this());
 
             cv::Mat frame;
-            double  frame_timestamp = 0.0;
+            double frame_timestamp = 0.0;
             {
                 std::lock_guard<std::mutex> lock(frame_mutex_);
                 if (!has_new_frame_)
                     continue;
-                frame           = latest_frame_.clone();
+                frame = latest_frame_.clone();
                 frame_timestamp = latest_frame_stamp_;
-                has_new_frame_  = false;
+                has_new_frame_ = false;
             }
 
             frame_count++;
@@ -179,7 +181,7 @@ public:
             // ── Landmark keypoint segmentation ───────────────────────────────
             // Scale YOLO bbox coords (640x480) → process resolution
             {
-                const float sx = (float)processSize.width  / 640.0f;
+                const float sx = (float)processSize.width / 640.0f;
                 const float sy = (float)processSize.height / 480.0f;
 
                 std::vector<LandmarkDetection> bboxes;
@@ -192,9 +194,9 @@ public:
                 {
                     Relocalization::LandmarkRegion region;
                     region.cls_id = det.cls_id;
-                    region.bbox   = cv::Rect(
-                        (int)(det.bbox.x      * sx), (int)(det.bbox.y      * sy),
-                        (int)(det.bbox.width  * sx), (int)(det.bbox.height * sy));
+                    region.bbox = cv::Rect(
+                        (int)(det.bbox.x * sx), (int)(det.bbox.y * sy),
+                        (int)(det.bbox.width * sx), (int)(det.bbox.height * sy));
 
                     for (const auto &kp : result.queryKeypoints)
                     {
@@ -203,10 +205,10 @@ public:
                     }
 
                     RCLCPP_INFO(get_logger(),
-                        "Landmark cls=%d: %zu keypoints in bbox [%d,%d,%dx%d]",
-                        region.cls_id, region.keypoints.size(),
-                        region.bbox.x, region.bbox.y,
-                        region.bbox.width, region.bbox.height);
+                                "Landmark cls=%d: %zu keypoints in bbox [%d,%d,%dx%d]",
+                                region.cls_id, region.keypoints.size(),
+                                region.bbox.x, region.bbox.y,
+                                region.bbox.width, region.bbox.height);
 
                     result.landmarkRegions.push_back(std::move(region));
                 }
@@ -214,19 +216,25 @@ public:
 
             // ── Weighted PnP (only when landmarks are detected) ───────────────
             Relocalization::WeightedPnPResult wpnp;
-            wpnp.success                 = false;
-            wpnp.position                = {0.0f, 0.0f, 0.0f};
-            wpnp.numInliers              = 0;
-            wpnp.totalCorrespondences    = 0;
-            wpnp.meanReprojectionError   = 0.0f;
+            wpnp.success = false;
+            wpnp.position = {0.0f, 0.0f, 0.0f};
+            wpnp.numInliers = 0;
+            wpnp.totalCorrespondences = 0;
+            wpnp.meanReprojectionError = 0.0f;
             wpnp.weightedReprojectionError = 0.0f;
-            wpnp.iterations              = 0;
+            wpnp.iterations = 0;
 
-            if (!result.matched2DPoints.empty() && !result.matched3DPoints.empty()
-                && !result.landmarkRegions.empty())
+            if (!result.matched2DPoints.empty() && !result.matched3DPoints.empty() && !result.landmarkRegions.empty())
             {
+                // ── Tuning point ─────────────────────────────────────────────
+                // landmark_weight : weight for any YOLO-detected keypoint (default 1.0)
+                // background_weight: weight for all other keypoints          (default 0.5)
+                // Per-class fine-tuning: edit getSemanticWeight() in relocalization.cpp
+                const float landmark_weight = 1.0f;
+                const float background_weight = 1.0f;
                 std::vector<float> weights = reloc_->assignWeightsFromLandmarks(
-                    result.matched2DPoints, result.landmarkRegions, 1.0f, 0.3f);
+                    result.matched2DPoints, result.landmarkRegions,
+                    landmark_weight, background_weight);
 
                 wpnp = reloc_->solvePnPWeighted(
                     result.matched3DPoints, result.matched2DPoints, weights);
@@ -236,28 +244,28 @@ public:
                     float dx = wpnp.position.x - result.position.x;
                     float dy = wpnp.position.y - result.position.y;
                     float dz = wpnp.position.z - result.position.z;
-                    float pose_delta = std::sqrt(dx*dx + dy*dy + dz*dz);
+                    float pose_delta = std::sqrt(dx * dx + dy * dy + dz * dz);
 
                     RCLCPP_INFO(get_logger(),
-                        "[WeightedPnP] inliers=%d/%d  reproj=%.3fpx  "
-                        "[StandardPnP] inliers=%d/%d  "
-                        "pose_delta=%.4fm  wpnp_iters=%d",
-                        wpnp.numInliers, wpnp.totalCorrespondences,
-                        wpnp.meanReprojectionError,
-                        result.numInliers, result.totalMatches,
-                        pose_delta, wpnp.iterations);
+                                "[WeightedPnP] inliers=%d/%d  reproj=%.3fpx  "
+                                "[StandardPnP] inliers=%d/%d  "
+                                "pose_delta=%.4fm  wpnp_iters=%d",
+                                wpnp.numInliers, wpnp.totalCorrespondences,
+                                wpnp.meanReprojectionError,
+                                result.numInliers, result.totalMatches,
+                                pose_delta, wpnp.iterations);
 
                     if (use_weighted_pnp_)
                     {
                         result.position = wpnp.position;
-                        result.rvec     = wpnp.rvec.clone();
-                        result.tvec     = wpnp.tvec.clone();
+                        result.rvec = wpnp.rvec.clone();
+                        result.tvec = wpnp.tvec.clone();
                     }
                 }
                 else
                 {
                     RCLCPP_WARN(get_logger(),
-                        "[WeightedPnP] failed — standard PnP result kept");
+                                "[WeightedPnP] failed — standard PnP result kept");
                 }
             }
 
@@ -272,7 +280,8 @@ public:
                 float dy = wpnp.position.y - result.position.y;
                 float dz = wpnp.position.z - result.position.z;
                 float pose_delta = wpnp.success
-                    ? std::sqrt(dx*dx + dy*dy + dz*dz) : 0.0f;
+                                       ? std::sqrt(dx * dx + dy * dy + dz * dz)
+                                       : 0.0f;
 
                 csv_log_ << frame_count << ","
                          << std::fixed << std::setprecision(6) << frame_timestamp << ","
@@ -291,8 +300,8 @@ public:
             if (result.success)
             {
                 RCLCPP_INFO(get_logger(),
-                    "Localized  frame=%d  inliers=%d/%d  conf=%.1f%%",
-                    frame_count, result.numInliers, result.totalMatches, result.confidence);
+                            "Localized  frame=%d  inliers=%d/%d  conf=%.1f%%",
+                            frame_count, result.numInliers, result.totalMatches, result.confidence);
                 publishPose(result);
             }
             else
@@ -314,13 +323,14 @@ public:
                 scaledLandmarkRects.reserve(result.landmarkRegions.size());
                 for (const auto &region : result.landmarkRegions)
                     scaledLandmarkRects.push_back(cv::Rect(
-                        (int)(region.bbox.x      * kpScale),
-                        (int)(region.bbox.y      * kpScale),
-                        (int)(region.bbox.width  * kpScale),
+                        (int)(region.bbox.x * kpScale),
+                        (int)(region.bbox.y * kpScale),
+                        (int)(region.bbox.width * kpScale),
                         (int)(region.bbox.height * kpScale)));
 
                 // Helper: returns true if a display-resolution point is inside any landmark bbox
-                auto isInLandmark = [&](const cv::Point2f &displayPt) -> bool {
+                auto isInLandmark = [&](const cv::Point2f &displayPt) -> bool
+                {
                     for (const auto &r : scaledLandmarkRects)
                         if (r.contains(cv::Point(displayPt)))
                             return true;
@@ -354,8 +364,8 @@ public:
                         cv::Point2f scaledPt(result.matched2DPoints[idx].x * kpScale,
                                              result.matched2DPoints[idx].y * kpScale);
                         cv::Scalar color = isInLandmark(scaledPt)
-                            ? cv::Scalar(0, 0, 255)
-                            : cv::Scalar(0, 255, 0);
+                                               ? cv::Scalar(0, 0, 255)
+                                               : cv::Scalar(0, 255, 0);
                         cv::circle(displayFrame, scaledPt, 5, color, 2);
                     }
                 }
@@ -380,16 +390,28 @@ public:
                             result.matched3DPoints[idx], displaySize.height);
                         pt3DProj.x += displaySize.width;
                         cv::Scalar lineColor = isInLandmark(pt2D)
-                            ? cv::Scalar(0, 0, 255)
-                            : cv::Scalar(0, 255, 0);
+                                                   ? cv::Scalar(0, 0, 255)
+                                                   : cv::Scalar(0, 255, 0);
                         cv::line(combined, pt2D, pt3DProj, lineColor, 1, cv::LINE_AA);
                     }
 
                     cv::Scalar statusColor;
                     std::string statusStr;
-                    if (result.confidence >= 70)      { statusColor = cv::Scalar(0, 255, 0);   statusStr = "EXCELLENT"; }
-                    else if (result.confidence >= 50) { statusColor = cv::Scalar(0, 200, 255); statusStr = "GOOD"; }
-                    else                              { statusColor = cv::Scalar(0, 165, 255); statusStr = "WEAK"; }
+                    if (result.confidence >= 70)
+                    {
+                        statusColor = cv::Scalar(0, 255, 0);
+                        statusStr = "EXCELLENT";
+                    }
+                    else if (result.confidence >= 50)
+                    {
+                        statusColor = cv::Scalar(0, 200, 255);
+                        statusStr = "GOOD";
+                    }
+                    else
+                    {
+                        statusColor = cv::Scalar(0, 165, 255);
+                        statusStr = "WEAK";
+                    }
 
                     cv::putText(combined, "LOCALIZED - " + statusStr,
                                 cv::Point(30, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, statusColor, 2);
@@ -415,7 +437,7 @@ public:
                     cv::Scalar landmarkColor;
                     if (result.landmarkRegions.empty())
                     {
-                        landmarkStr   = "Landmarks: NONE";
+                        landmarkStr = "Landmarks: NONE";
                         landmarkColor = cv::Scalar(150, 150, 150);
                     }
                     else
@@ -430,7 +452,7 @@ public:
                         lm << "Landmarks:";
                         for (const auto &kv : counts)
                             lm << " " << kv.first << "(" << kv.second << ")";
-                        landmarkStr   = lm.str();
+                        landmarkStr = lm.str();
                         landmarkColor = cv::Scalar(0, 0, 255);
                     }
                     cv::putText(combined, landmarkStr,
@@ -461,7 +483,7 @@ private:
     struct LandmarkDetection
     {
         int cls_id;
-        cv::Rect bbox;   // in YOLO resolution (640x480)
+        cv::Rect bbox; // in YOLO resolution (640x480)
     };
 
     void imageCallback(const sensor_msgs::msg::Image::SharedPtr msg)
@@ -470,9 +492,9 @@ private:
         {
             auto cv_img = cv_bridge::toCvCopy(msg, "bgr8");
             std::lock_guard<std::mutex> lock(frame_mutex_);
-            latest_frame_       = cv_img->image;
+            latest_frame_ = cv_img->image;
             latest_frame_stamp_ = rclcpp::Time(msg->header.stamp).seconds();
-            has_new_frame_      = true;
+            has_new_frame_ = true;
         }
         catch (const cv_bridge::Exception &e)
         {
@@ -532,24 +554,24 @@ private:
 
     std::string vocab_path_;
     std::string config_path_;
-    bool        visualize_;
-    bool        use_weighted_pnp_;
-    bool        ready_;
+    bool visualize_;
+    bool use_weighted_pnp_;
+    bool ready_;
 
     std::unique_ptr<Relocalization::RelocalizationModule> reloc_;
-    rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr           pose_pub_;
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr         image_sub_;
-    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr           yolo_sub_;
+    rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pose_pub_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr yolo_sub_;
 
     // Camera frame (populated by imageCallback)
-    cv::Mat    latest_frame_;
-    double     latest_frame_stamp_{0.0};
-    bool       has_new_frame_{false};
+    cv::Mat latest_frame_;
+    double latest_frame_stamp_{0.0};
+    bool has_new_frame_{false};
     std::mutex frame_mutex_;
 
     // YOLO bboxes (populated by yoloCallback)
     std::vector<LandmarkDetection> latest_bboxes_;
-    std::mutex                     bbox_mutex_;
+    std::mutex bbox_mutex_;
 
     // CSV comparison log
     std::ofstream csv_log_;
@@ -559,7 +581,7 @@ int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<RelocalizationNode>();
-    node->run();   // blocks on main thread — OpenCV imshow works correctly here
+    node->run(); // blocks on main thread — OpenCV imshow works correctly here
     rclcpp::shutdown();
     return 0;
 }

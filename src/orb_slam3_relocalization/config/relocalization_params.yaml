@@ -3,7 +3,8 @@ camera_node:
     video_path: "~/Documents/ORB_SLAM3_Relocalization/data/rgbd_dataset_freiburg3_long_office_household/rgbd_dataset_freiburg3_long_office_household_rgb.mp4"
     # video_path: "~/Documents/ORB_SLAM3_Relocalization/data/dataset1.mp4"
     camera_id: 0 # used when video_path is empty (webcam mode)
-    timestamp_start: 1341848149.1989 # first timestamp from validation groundtruth.txt (0.0 = ROS wall clock)
+    #timestamp_start: 1341848149.1989 # first timestamp from validation groundtruth.txt (0.0 = ROS wall clock)
+    timestamp_start: 1341847980.7900 # for tum_fr3_long_office_household, first timestamp from groundtruth.txt
 
 relocalization_node:
   ros__parameters:
