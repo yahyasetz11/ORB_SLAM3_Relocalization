@@ -139,12 +139,6 @@ def process_pair(csv_path, gt_path, no_align, max_ts_diff, label):
 
     std_xyz  = csv_valid[["std_x", "std_y", "std_z"]].to_numpy()
     wpnp_xyz = csv_valid[["wpnp_x", "wpnp_y", "wpnp_z"]].to_numpy()
-    wpnp_ran = ~(
-        (wpnp_xyz[:, 0] == 0.0) &
-        (wpnp_xyz[:, 1] == 0.0) &
-        (wpnp_xyz[:, 2] == 0.0)
-    )
-
     if not no_align:
         scale, R, t = umeyama_alignment(std_xyz, gt_xyz)
         std_xyz_plot  = apply_alignment(std_xyz, scale, R, t)
@@ -155,17 +149,17 @@ def process_pair(csv_path, gt_path, no_align, max_ts_diff, label):
         wpnp_xyz_plot = wpnp_xyz
 
     std_err  = translation_error(std_xyz_plot, gt_xyz)
-    wpnp_err = translation_error(wpnp_xyz_plot[wpnp_ran], gt_xyz[wpnp_ran])
+    wpnp_err = translation_error(wpnp_xyz_plot, gt_xyz)
 
     print(f"  Std PnP  — frames: {len(std_err):4d}  "
           f"mean: {std_err.mean():.4f}m  median: {np.median(std_err):.4f}m  "
           f"max: {std_err.max():.4f}m")
-    print(f"  WPnP     — frames: {wpnp_ran.sum():4d}  "
+    print(f"  WPnP     — frames: {len(wpnp_err):4d}  "
           f"mean: {wpnp_err.mean():.4f}m  median: {np.median(wpnp_err):.4f}m  "
           f"max: {wpnp_err.max():.4f}m")
 
     timestamps_all  = csv_valid["timestamp"].to_numpy()
-    timestamps_wpnp = timestamps_all[wpnp_ran]
+    timestamps_wpnp = timestamps_all
 
     return {
         "label":           label,
