@@ -88,6 +88,8 @@ namespace Relocalization
             const std::vector<cv::Point3f> &points3D,
             const std::vector<cv::Point2f> &points2D,
             const std::vector<float> &weights,
+            const cv::Mat &rvec_hint = cv::Mat(),
+            const cv::Mat &tvec_hint = cv::Mat(),
             int maxIterations = 100,
             double convergenceThreshold = 1e-6,
             float inlierThresholdPx = 2.0f);

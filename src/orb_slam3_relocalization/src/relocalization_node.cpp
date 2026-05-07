@@ -224,20 +224,32 @@ public:
             wpnp.weightedReprojectionError = 0.0f;
             wpnp.iterations = 0;
 
-            if (!result.matched2DPoints.empty() && !result.matched3DPoints.empty() && !result.landmarkRegions.empty())
+            if (!result.inlierIndices.empty() && !result.landmarkRegions.empty())
             {
+                // Filter correspondences to RANSAC inliers only
+                std::vector<cv::Point2f> inlier2D;
+                std::vector<cv::Point3f> inlier3D;
+                inlier2D.reserve(result.inlierIndices.size());
+                inlier3D.reserve(result.inlierIndices.size());
+                for (int idx : result.inlierIndices)
+                {
+                    inlier2D.push_back(result.matched2DPoints[idx]);
+                    inlier3D.push_back(result.matched3DPoints[idx]);
+                }
+
                 // ── Tuning point ─────────────────────────────────────────────
                 // landmark_weight : weight for any YOLO-detected keypoint (default 1.0)
-                // background_weight: weight for all other keypoints          (default 0.5)
+                // background_weight: weight for all other keypoints          (default 1.0)
                 // Per-class fine-tuning: edit getSemanticWeight() in relocalization.cpp
                 const float landmark_weight = 1.0f;
                 const float background_weight = 1.0f;
                 std::vector<float> weights = reloc_->assignWeightsFromLandmarks(
-                    result.matched2DPoints, result.landmarkRegions,
+                    inlier2D, result.landmarkRegions,
                     landmark_weight, background_weight);
 
                 wpnp = reloc_->solvePnPWeighted(
-                    result.matched3DPoints, result.matched2DPoints, weights);
+                    inlier3D, inlier2D, weights,
+                    result.rvec, result.tvec);
 
                 if (wpnp.success)
                 {

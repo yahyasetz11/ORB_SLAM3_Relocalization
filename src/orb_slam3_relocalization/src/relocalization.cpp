@@ -1203,6 +1203,8 @@ namespace Relocalization
         const std::vector<cv::Point3f> &points3D,
         const std::vector<cv::Point2f> &points2D,
         const std::vector<float> &weights,
+        const cv::Mat &rvec_hint,
+        const cv::Mat &tvec_hint,
         int maxIterations,
         double convergenceThreshold,
         float inlierThresholdPx)
@@ -1230,15 +1232,23 @@ namespace Relocalization
         for (int i = 0; i < n; ++i)
             w_norm[i] = (double)(weights[i] / w_mean);
 
-        // Warm-start with EPNP (avoids cold-start divergence)
+        // Warm-start: prefer caller-supplied RANSAC pose; fall back to fresh EPnP
         cv::Mat rvec_init, tvec_init;
-        bool init_ok = cv::solvePnP(points3D, points2D, mK, mDistCoef,
-                                    rvec_init, tvec_init, false,
-                                    cv::SOLVEPNP_EPNP);
-        if (!init_ok)
+        if (!rvec_hint.empty() && !tvec_hint.empty())
         {
-            rvec_init = cv::Mat::zeros(3, 1, CV_64F);
-            tvec_init = cv::Mat::zeros(3, 1, CV_64F);
+            rvec_hint.convertTo(rvec_init, CV_64F);
+            tvec_hint.convertTo(tvec_init, CV_64F);
+        }
+        else
+        {
+            bool init_ok = cv::solvePnP(points3D, points2D, mK, mDistCoef,
+                                        rvec_init, tvec_init, false,
+                                        cv::SOLVEPNP_EPNP);
+            if (!init_ok)
+            {
+                rvec_init = cv::Mat::zeros(3, 1, CV_64F);
+                tvec_init = cv::Mat::zeros(3, 1, CV_64F);
+            }
         }
 
         // Convert rvec/tvec → Sophus SE3
