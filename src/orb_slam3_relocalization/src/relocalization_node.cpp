@@ -104,16 +104,6 @@ public:
 
         pose_pub_ = create_publisher<geometry_msgs::msg::Pose>("/relocalization/pose", 10);
 
-        image_sub_ = create_subscription<sensor_msgs::msg::Image>(
-            "/camera/image_raw", 10,
-            std::bind(&RelocalizationNode::imageCallback, this, std::placeholders::_1));
-        RCLCPP_INFO(get_logger(), "Subscribed to /camera/image_raw");
-
-        yolo_sub_ = create_subscription<std_msgs::msg::String>(
-            "yolo/results", 10,
-            std::bind(&RelocalizationNode::yoloCallback, this, std::placeholders::_1));
-        RCLCPP_INFO(get_logger(), "Subscribed to yolo/results");
-
         reloc_ = std::make_unique<Relocalization::RelocalizationModule>(vocab_path_, config_path_);
 
         RCLCPP_INFO(get_logger(), "Loading map...");
@@ -136,6 +126,18 @@ public:
         }
 
         ready_ = true;
+
+        // Subscribe only after map is loaded so camera_node doesn't start
+        // publishing until this node is truly ready to process frames.
+        image_sub_ = create_subscription<sensor_msgs::msg::Image>(
+            "/camera/image_raw", 10,
+            std::bind(&RelocalizationNode::imageCallback, this, std::placeholders::_1));
+        RCLCPP_INFO(get_logger(), "Subscribed to /camera/image_raw");
+
+        yolo_sub_ = create_subscription<std_msgs::msg::String>(
+            "yolo/results", 10,
+            std::bind(&RelocalizationNode::yoloCallback, this, std::placeholders::_1));
+        RCLCPP_INFO(get_logger(), "Subscribed to yolo/results");
     }
 
     // Called from main() on the main thread — keeps imshow on the correct thread.

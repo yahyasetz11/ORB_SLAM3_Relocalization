@@ -46,7 +46,22 @@ class CameraNode(Node):
 
         self.bridge = CvBridge()
         self.pub = self.create_publisher(Image, '/camera/image_raw', 10)
-        self.timer = self.create_timer(1.0 / self._fps, self.publish_frame)
+
+        # Wait until at least one subscriber is ready before publishing.
+        # The relocalization node takes several seconds to load the vocab and
+        # map, so frames published before it subscribes would be silently lost.
+        self.get_logger().info(
+            'Waiting for subscribers on /camera/image_raw ...')
+        self._pub_timer = None
+        self._wait_timer = self.create_timer(0.5, self._wait_for_subscribers)
+
+    def _wait_for_subscribers(self):
+        if self.pub.get_subscription_count() >= 2:
+            self._wait_timer.cancel()
+            self.get_logger().info(
+                f'{self.pub.get_subscription_count()} subscriber(s) connected'
+                ' — starting frame publishing')
+            self._pub_timer = self.create_timer(1.0 / self._fps, self.publish_frame)
 
     def publish_frame(self):
         ret, frame = self.cap.read()
