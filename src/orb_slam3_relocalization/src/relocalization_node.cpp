@@ -217,7 +217,7 @@ public:
             // ── Weighted PnP (only when landmarks are detected) ───────────────
             Relocalization::WeightedPnPResult wpnp;
             wpnp.success = false;
-            wpnp.position = result.position;
+            wpnp.position = {0.0f, 0.0f, 0.0f};
             wpnp.numInliers = 0;
             wpnp.totalCorrespondences = 0;
             wpnp.meanReprojectionError = 0.0f;
@@ -242,7 +242,7 @@ public:
                 // background_weight: weight for all other keypoints          (default 1.0)
                 // Per-class fine-tuning: edit getSemanticWeight() in relocalization.cpp
                 const float landmark_weight = 1.0f;
-                const float background_weight = 0.25f;
+                const float background_weight = 1.0f;
                 std::vector<float> weights = reloc_->assignWeightsFromLandmarks(
                     inlier2D, result.landmarkRegions,
                     landmark_weight, background_weight);
