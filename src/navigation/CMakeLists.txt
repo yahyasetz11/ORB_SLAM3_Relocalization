@@ -18,6 +18,8 @@ find_package(ament_cmake_python REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OpenCV REQUIRED)
 
+set(ORB_SLAM3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../ORB_SLAM3)
+
 # TODO: Uncomment once ORB-SLAM3 provides a CMake config file.
 #       If it does not, set ORB_SLAM3_INCLUDE_DIRS and ORB_SLAM3_LIBS
 #       manually in a toolchain file or via -D flags at configure time.
@@ -64,10 +66,10 @@ install(PROGRAMS navigation/test/position_publisher.py
 add_executable(osa_to_csv tools/osa_to_csv.cpp)
 
 target_include_directories(osa_to_csv PRIVATE
-  /home/orange/ORB_SLAM3/include
-  /home/orange/ORB_SLAM3/include/CameraModels
-  /home/orange/ORB_SLAM3
-  /home/orange/ORB_SLAM3/Thirdparty/Sophus
+  ${ORB_SLAM3_DIR}/include
+  ${ORB_SLAM3_DIR}/include/CameraModels
+  ${ORB_SLAM3_DIR}
+  ${ORB_SLAM3_DIR}/Thirdparty/Sophus
   ${EIGEN3_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS} 
 )
@@ -77,7 +79,7 @@ target_compile_options(osa_to_csv PRIVATE
 )
 
 target_link_libraries(osa_to_csv
-  /home/orange/ORB_SLAM3/lib/libORB_SLAM3.so
+  ${ORB_SLAM3_DIR}/lib/libORB_SLAM3.so
   Eigen3::Eigen
   ${OpenCV_LIBS}
 )
