@@ -38,9 +38,7 @@ class PathNode:
         return self.g_cost + self.h_cost
     
     def __lt__(self, other: "PathNode") -> bool:
-        if self.f_cost < other.f_cost:
-            return False
-        return True
+        return self.f_cost < other.f_cost
 
     def has_parent(self) -> bool:
         if self.parent is not None:
