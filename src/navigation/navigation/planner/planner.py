@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import final
+from typing import final, Optional
 
 from numpy.typing import NDArray
 
@@ -9,11 +9,14 @@ from .utils import world_2_occupancy_map, is_standable, is_in_bounds
 class Planner():
     def __init__(
         self,
-        world_map:NDArray,
-        start_coords:PixelCoords, goal_coords:PixelCoords,
-        goal_threshold:float=3, iter_limit:int=10000,
-        inflation_radius:int=8,
-        ):
+        world_map: NDArray,
+        start_coords: PixelCoords,
+        goal_coords: PixelCoords,
+        goal_threshold: float = 3,
+        iter_limit: int = 10000,
+        inflation_radius: int = 8,
+        inflated_map: Optional[NDArray] = None,
+    ):
         
         self.world_map = world_map.copy()
         self.start_coords = start_coords
@@ -25,9 +28,16 @@ class Planner():
         self.occupancy_map = None
         self.inflated_obstacle_map = None
         self.inflation_radius = inflation_radius
+        self._cached_inflated_map = inflated_map
 
     def set_map(self):
-        self.occupancy_map, self.inflated_obstacle_map = world_2_occupancy_map(self.world_map, self.start_coords, self.goal_coords, self.inflation_radius)
+        if self._cached_inflated_map is not None:
+            self.occupancy_map = self.world_map
+            self.inflated_obstacle_map = self._cached_inflated_map
+        else:
+            self.occupancy_map, self.inflated_obstacle_map = world_2_occupancy_map(
+                self.world_map, self.start_coords, self.goal_coords, self.inflation_radius
+            )
 
     def normalize_start(self):
         if not isinstance(self.start_coords, PixelCoords):

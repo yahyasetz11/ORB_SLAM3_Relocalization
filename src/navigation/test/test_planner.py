@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from navigation.planner.primitives import PixelCoords, PathNode
 from navigation.planner.utils import inflated_obstacles
+from navigation.planner.a_star import AStarImplementation
 
 
 def make_node(x, y, g=0.0, h=0.0):
@@ -71,3 +72,24 @@ class TestInflatedObstacles:
         assert result[12, 12] == 1
         assert result[8, 12] == 1
         assert result[12, 8] == 1
+
+
+class TestPlannerCachedInflation:
+    def _simple_map(self):
+        # 20x20 free map (all zeros)
+        return np.zeros((20, 20), dtype=np.uint8)
+
+    def test_planner_accepts_inflated_map(self):
+        world_map = self._simple_map()
+        pre_inflated = world_map.copy()  # already-computed inflated map
+        start = PixelCoords(1, 1)
+        goal  = PixelCoords(18, 18)
+        planner = AStarImplementation(
+            world_map=world_map,
+            start_coords=start,
+            goal_coords=goal,
+            iter_limit=10000,
+            inflated_map=pre_inflated,
+        )
+        path, _ = planner.plan()
+        assert len(path) > 0, "Expected a path on a free map"
