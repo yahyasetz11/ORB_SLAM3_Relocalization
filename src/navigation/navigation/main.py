@@ -9,7 +9,7 @@ from rclpy.node import Node
 from cv_bridge import CvBridge
 
 from nav_msgs.msg import Path
-from geometry_msgs.msg import PoseStamped, PointStamped
+from geometry_msgs.msg import PoseStamped, PointStamped, Pose
 from sensor_msgs.msg import Image
 from collections import deque
 from typing import List, Optional
@@ -28,8 +28,19 @@ class NavigationNode(Node):
             Image, '/map_image', self.map_callback, 10)
         self.goal_sub = self.create_subscription(
             PointStamped, 'goal_position', self.goal_callback, 10)
-        self.position_sub = self.create_subscription(
-            PointStamped, 'current_position', self.position_callback, 10)
+        self.declare_parameter('pose_source', 'dummy')
+        self.declare_parameter('pose_scale', 1.0)
+        self._pose_source = self.get_parameter('pose_source').get_parameter_value().string_value
+        self._pose_scale  = self.get_parameter('pose_scale').get_parameter_value().double_value
+
+        if self._pose_source == 'relocalization':
+            self.position_sub = self.create_subscription(
+                Pose, '/relocalization/pose', self.relocalization_pose_callback, 10)
+            self.get_logger().info('Pose source: /relocalization/pose')
+        else:
+            self.position_sub = self.create_subscription(
+                PointStamped, 'current_position', self.position_callback, 10)
+            self.get_logger().info('Pose source: current_position (dummy)')
 
         # Publishers
         self.static_image_pub = self.create_publisher(Image, 'static_image', 10)
@@ -108,6 +119,21 @@ class NavigationNode(Node):
         if self.check_deviation(self.current_position):
             self.get_logger().info('Deviation detected — replanning from current position...')
             self.start_coords = self.current_position
+            self.try_plan()
+
+    def relocalization_pose_callback(self, msg: Pose):
+        if self.world_map is None:
+            return
+        x = int(msg.position.x * self._pose_scale)
+        y = int(msg.position.y * self._pose_scale)
+        current = PixelCoords(x, y)
+        self.current_position = current
+
+        self.publish_trails(current)
+
+        if self.check_deviation(current):
+            self.get_logger().info('Deviation detected — replanning from current position...')
+            self.start_coords = current
             self.try_plan()
 
     # ── Planning ───────────────────────────────────────────────────────────────
