@@ -62,3 +62,12 @@ class TestInflatedObstacles:
         m = self._make_map()
         result = inflated_obstacles(m, inflation_radius=3)
         assert result is not None
+
+    def test_diagonal_corner_cells_are_inflated(self):
+        m = self._make_map()   # obstacle at (10,10)
+        result = inflated_obstacles(m, inflation_radius=3)
+        # Original algorithm marks (10±2, 10±2); MORPH_RECT does too; MORPH_ELLIPSE does not
+        assert result[8, 8] == 1    # (col=8, row=8) i.e. x=8,y=8
+        assert result[12, 12] == 1
+        assert result[8, 12] == 1
+        assert result[12, 8] == 1

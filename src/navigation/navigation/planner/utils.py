@@ -153,7 +153,7 @@ def inflated_obstacles(
     goal: Optional[PixelCoords] = None,
 ) -> NDArray:
     size = 2 * inflation_radius - 1
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (size, size))
     inflated = cv2.dilate(occupancy_map.astype(np.uint8), kernel)
     inflated = inflated.astype(occupancy_map.dtype)
     if start is not None:
