@@ -1,0 +1,4 @@
+navigation_node:
+  ros__parameters:
+    pose_source: "dummy"    # "dummy" | "relocalization"
+    pose_scale: 1.0         # Pose.position.x/y * scale → pixel coords

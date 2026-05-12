@@ -111,6 +111,7 @@ install(DIRECTORY navigation/maps/
 )
 
 install(FILES navigation/config/locations.yaml
+              navigation/config/navigation_params.yaml
   DESTINATION share/${PROJECT_NAME}/config
 )
 
