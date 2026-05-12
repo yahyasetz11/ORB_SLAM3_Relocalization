@@ -16,7 +16,7 @@ from typing import List, Optional
 
 from navigation.planner.a_star import AStarImplementation
 from navigation.planner.primitives import PixelCoords, PathNode
-from navigation.planner.utils import smooth_path_generation, draw_path, draw_target, pixel_to_world, euclidean_distance
+from navigation.planner.utils import smooth_path_generation, draw_path, draw_target, pixel_to_world, euclidean_distance, inflated_obstacles
 
 
 class NavigationNode(Node):
@@ -49,7 +49,8 @@ class NavigationNode(Node):
         # Visualization
         self.static_base = None       # grid image, built once
         self.path_base = None       # static_base + current path
-        self.trail = deque(maxlen=500) 
+        self.trail = deque(maxlen=500)
+        self.inflated_map_raw: Optional[np.ndarray] = None
 
     # ── Subscribers ────────────────────────────────────────────────────────────
 
@@ -61,6 +62,7 @@ class NavigationNode(Node):
         grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(grey, 127, 1, cv2.THRESH_BINARY_INV)
         self.world_map = binary
+        self.inflated_map_raw = inflated_obstacles(self.world_map, 8)
 
         # store visual base layers
         self.static_base = img.copy()
@@ -113,12 +115,20 @@ class NavigationNode(Node):
     def try_plan(self):
         if self.world_map is None or self.start_coords is None or self.goal_coords is None:
             return
+        if self.inflated_map_raw is None:
+            return
+
+        # copy and clear start/goal cells so they're never treated as obstacles
+        inflated = self.inflated_map_raw.copy()
+        inflated[self.start_coords.y_coords, self.start_coords.x_coords] = 0
+        inflated[self.goal_coords.y_coords, self.goal_coords.x_coords] = 0
 
         planner = AStarImplementation(
             world_map=self.world_map,
             start_coords=self.start_coords,
             goal_coords=self.goal_coords,
             iter_limit=10000,
+            inflated_map=inflated,
         )
 
         try:
