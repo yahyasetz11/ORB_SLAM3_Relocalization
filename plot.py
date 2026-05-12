@@ -40,7 +40,7 @@ GROUNDTRUTH_DEFAULT = (
 )
 CSV_DEFAULT = "comparison_log.csv"
 
-# Color palette: each pair gets one base color; std=solid, wpnp=dashed
+# Color palettes: Std PnP uses PAIR_COLORS, WPnP uses WPNP_COLORS
 PAIR_COLORS = [
     "#2196F3",  # blue
     "#F44336",  # red
@@ -48,6 +48,14 @@ PAIR_COLORS = [
     "#FF9800",  # orange
     "#9C27B0",  # purple
     "#00BCD4",  # cyan
+]
+WPNP_COLORS = [
+    "#FF9800",  # orange  (contrasts with blue)
+    "#4CAF50",  # green   (contrasts with red)
+    "#FF5722",  # deep orange (contrasts with green)
+    "#2196F3",  # blue    (contrasts with orange)
+    "#F44336",  # red     (contrasts with purple)
+    "#9C27B0",  # purple  (contrasts with cyan)
 ]
 
 
@@ -212,15 +220,30 @@ def main():
     ]
 
     # ── Plot ──────────────────────────────────────────────────────────────────
-    # Use relative time (seconds from start of first sequence) so the x-axis
-    # shows a human-readable 0-based offset instead of raw Unix timestamps.
+    # One subplot per CSV pair, stacked vertically and sharing the x-axis so
+    # runs can be compared at a glance with a common time reference.
     t0 = min(r["timestamps_std"][0] for r in results)
+    n  = len(results)
 
-    fig, ax = plt.subplots(figsize=(13, 5))
+    fig, axes = plt.subplots(
+        n, 1,
+        figsize=(13, 2.5 * n),
+        sharex=True,
+        sharey=True,
+    )
+    if n == 1:
+        axes = [axes]
 
-    for i, r in enumerate(results):
-        color = PAIR_COLORS[i % len(PAIR_COLORS)]
-        label = r["label"]
+    fig.suptitle(
+        f"Relocalization error vs TUM ground truth{align_label}\n"
+        "Standard PnP (solid) vs Weighted PnP (dotted)",
+        fontsize=11,
+    )
+
+    for ax, r in zip(axes, results):
+        i = results.index(r)
+        color      = PAIR_COLORS[i % len(PAIR_COLORS)]
+        wpnp_color = WPNP_COLORS[i % len(WPNP_COLORS)]
 
         ts_std  = r["timestamps_std"]  - t0
         ts_wpnp = r["timestamps_wpnp"] - t0
@@ -228,7 +251,7 @@ def main():
         ax.plot(
             ts_std, r["std_err"],
             color=color, linewidth=1.0, alpha=0.85, linestyle="-",
-            label=f"[{label}] Std PnP   mean={r['std_err'].mean():.3f}m",
+            label=f"Std PnP  mean={r['std_err'].mean():.3f}m",
         )
         ax.axhline(r["std_err"].mean(), color=color, linestyle="--",
                    linewidth=0.8, alpha=0.4)
@@ -236,19 +259,17 @@ def main():
         if len(r["wpnp_err"]) > 0:
             ax.plot(
                 ts_wpnp, r["wpnp_err"],
-                color=color, linewidth=1.0, alpha=0.65, linestyle=":",
-                label=f"[{label}] WPnP      mean={r['wpnp_err'].mean():.3f}m",
+                color=wpnp_color, linewidth=1.0, alpha=0.65, linestyle=":",
+                label=f"WPnP     mean={r['wpnp_err'].mean():.3f}m",
             )
 
-    ax.set_xlabel("Time from sequence start (s)")
-    ax.set_ylabel("Translation error (m)")
-    ax.set_title(
-        f"Relocalization error vs TUM ground truth{align_label}\n"
-        "Standard PnP (solid) vs Weighted PnP (dotted)"
-    )
-    ax.legend(loc="upper right", fontsize=8)
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(bottom=0)
+        ax.set_title(r["label"], fontsize=10, loc="left", pad=4)
+        ax.set_ylabel("Translation error (m)")
+        ax.legend(loc="upper right", fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(bottom=0)
+
+    axes[-1].set_xlabel("Time from sequence start (s)")
 
     plt.tight_layout()
 
