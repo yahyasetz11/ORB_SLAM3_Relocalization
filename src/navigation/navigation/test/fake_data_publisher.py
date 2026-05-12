@@ -76,9 +76,9 @@ OVAL_CY   = 5.0   # centre y  (metres)
 OVAL_RX   = 3.0   # x radius  (metres)
 OVAL_RY   = 2.0   # y radius  (metres)
 
-# One full loop takes LOOP_SECONDS seconds.  The position timer fires at 2 Hz,
-# so angle advances by  2π / (LOOP_SECONDS × 2)  each tick.
-LOOP_SECONDS = 60.0
+# One full loop takes LOOP_SECONDS seconds.  The position timer fires at ~0.67 Hz,
+# so angle advances by  2π / (LOOP_SECONDS × 0.67)  each tick.
+LOOP_SECONDS = 120.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ class FakeDataPublisher(Node):
         self.create_timer(1.0, self._publish_map_once)
 
         # Position at 2 Hz
-        self.create_timer(0.5, self._publish_position)
+        self.create_timer(1.5, self._publish_position)
 
         # Log position at 0.5 Hz
         self.create_timer(2.0, self._log_position)

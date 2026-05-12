@@ -172,7 +172,28 @@ class NavigationNode(Node):
             cv2.polylines(path_base_img, [points], isClosed=False, color=(200, 200, 200), thickness=2)
 
         if current_position is not None:
-            cv2.circle(path_base_img, (current_position.x_coords, current_position.y_coords), radius=4, color=(0, 255, 255), thickness=-1)
+            cx, cy = current_position.x_coords, current_position.y_coords
+            # determine heading: prefer trail direction, fall back to next path node
+            angle = 0.0
+            if len(self.trail) >= 2:
+                px, py = self.trail[-2]
+                dx, dy = cx - px, cy - py
+                if dx != 0 or dy != 0:
+                    angle = np.arctan2(dy, dx)
+            elif self.smooth_path and len(self.smooth_path) > 1:
+                nx = self.smooth_path[1].coords.x_coords
+                ny = self.smooth_path[1].coords.y_coords
+                dx, dy = nx - cx, ny - cy
+                if dx != 0 or dy != 0:
+                    angle = np.arctan2(dy, dx)
+            # pointy triangle: tip forward, wide base behind
+            tip_len, half_base = 9, 4
+            local = np.array([[tip_len, 0], [-tip_len // 2, -half_base], [-tip_len // 2, half_base]], dtype=np.float32)
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+            pts = (local @ rot.T + np.array([cx, cy])).astype(np.int32)
+            cv2.polylines(path_base_img, [pts], isClosed=True, color=(30, 30, 30), thickness=2, lineType=cv2.LINE_AA)
+            cv2.fillPoly(path_base_img, [pts], color=(0, 255, 255), lineType=cv2.LINE_AA)
         
         ros_trail_img = self.bridge.cv2_to_imgmsg(path_base_img, encoding='bgr8')
         ros_trail_img.header.stamp = self.get_clock().now().to_msg()
@@ -211,7 +232,7 @@ class NavigationNode(Node):
                         return PixelCoords(nx, ny)
         return None
 
-    def check_deviation(self, current_position, threshold=10) -> bool:
+    def check_deviation(self, current_position, threshold=5) -> bool:
         if self.smooth_path is None:
             return False
         min_distance = float('inf')
