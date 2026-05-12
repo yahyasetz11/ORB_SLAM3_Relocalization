@@ -158,13 +158,14 @@ class NavigationNode(Node):
         self.path_image_pub.publish(ros_path_img)
     
     def publish_trails(self, current_position=None):
-        if self.path_base is None:
+        base = self.path_base if self.path_base is not None else self.static_base
+        if base is None:
             return
-        
+
         if current_position is not None:
             self.trail.append((current_position.x_coords, current_position.y_coords))
-            
-        path_base_img = self.path_base.copy()
+
+        path_base_img = base.copy()
         
         if len(self.trail) >= 2:
             points = np.array(list(self.trail), dtype=np.int32).reshape((-1, 1, 2))

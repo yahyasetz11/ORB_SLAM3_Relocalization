@@ -4,6 +4,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 from cv_bridge import CvBridge
+from ament_index_python.packages import get_package_share_directory
 
 from sklearn.neighbors import BallTree
 import numpy as np
@@ -14,11 +15,13 @@ import os
 class MapPublisherNode(Node):
     def __init__(self):
         super().__init__("map_publisher")
-        self.map_dir = os.path.join(
-            os.path.expanduser("~"),
-            "ORB_SLAM3_Relocalization",
-            "src", "navigation", "navigation", "maps"
-        )
+        self.declare_parameter("map_dir", "")
+        map_dir_param = self.get_parameter("map_dir").get_parameter_value().string_value
+        if map_dir_param:
+            self.map_dir = map_dir_param
+        else:
+            share = get_package_share_directory("navigation")
+            self.map_dir = os.path.join(share, "maps")
         os.makedirs(self.map_dir, exist_ok=True)
         self.get_logger().info(f"Map directory: {self.map_dir}")
 

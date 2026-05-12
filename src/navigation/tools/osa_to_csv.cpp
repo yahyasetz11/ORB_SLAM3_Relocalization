@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <cstdio>
+#include <unistd.h>
 
 #include "pangolin_stub.h"
 #include "System.h"
@@ -38,7 +39,7 @@ std::vector<ORB_SLAM3::MapPoint*> load_map(
     ORB_SLAM3::System slam(vocab_path, config_path,
                            ORB_SLAM3::System::MONOCULAR, false /*no viewer*/);
 
-    ORB_SLAM3::Atlas* atlas = slam.GetAtlas();
+    ORB_SLAM3::Atlas* atlas = slam.mpAtlas;
 
     // GetCurrentMap() returns a newly created empty map that ORB-SLAM3 creates
     // for continued operation after loading the atlas.  The saved data lives in
@@ -144,6 +145,23 @@ int main(int argc, char** argv)
     if (atlas_stem.size() >= 4 &&
         atlas_stem.substr(atlas_stem.size() - 4) == ".osa")
         atlas_stem.erase(atlas_stem.size() - 4);
+
+    // ORB-SLAM3's LoadAtlas() prepends "./" unconditionally, so an absolute
+    // path like "/home/.../maps/map" becomes ".//home/.../maps/map" which
+    // resolves as a relative path and fails.  Fix: chdir to the atlas directory
+    // and pass only the basename — then "./" + "map" = "./map" works correctly.
+    {
+        auto slash = atlas_stem.rfind('/');
+        if (slash != std::string::npos) {
+            std::string atlas_dir  = atlas_stem.substr(0, slash);
+            std::string atlas_base = atlas_stem.substr(slash + 1);
+            if (chdir(atlas_dir.c_str()) != 0) {
+                std::cerr << "Error: cannot chdir to atlas directory: " << atlas_dir << "\n";
+                return 1;
+            }
+            atlas_stem = atlas_base;
+        }
+    }
 
     // Patch System.LoadAtlasFromFile in a temp copy of the YAML so that
     // ORB-SLAM3 reads the atlas we actually want, not whatever the file says.
