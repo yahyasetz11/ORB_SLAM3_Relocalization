@@ -93,3 +93,55 @@ class TestPlannerCachedInflation:
         )
         path, _ = planner.plan()
         assert len(path) > 0, "Expected a path on a free map"
+
+
+class TestAStarHeapq:
+    def _open_map(self, h=30, w=30):
+        return np.zeros((h, w), dtype=np.uint8)
+
+    def _map_with_wall(self):
+        # 30x30 map with a vertical wall at x=15, gap at y=25
+        m = np.zeros((30, 30), dtype=np.uint8)
+        for y in range(0, 25):
+            m[y, 15] = 1
+        return m
+
+    def test_finds_path_on_open_map(self):
+        m = self._open_map()
+        planner = AStarImplementation(
+            world_map=m,
+            start_coords=PixelCoords(1, 1),
+            goal_coords=PixelCoords(28, 28),
+            iter_limit=50000,
+            inflated_map=m.copy(),
+        )
+        path, _ = planner.plan()
+        assert len(path) >= 2, "Expected a path on a free map"
+        assert path[0].coords == PixelCoords(1, 1)
+
+    def test_finds_path_around_wall(self):
+        m = self._map_with_wall()
+        planner = AStarImplementation(
+            world_map=m,
+            start_coords=PixelCoords(5, 5),
+            goal_coords=PixelCoords(25, 5),
+            iter_limit=50000,
+            inflated_map=m.copy(),
+        )
+        path, _ = planner.plan()
+        assert len(path) >= 2, "Expected a path around the wall"
+
+    def test_returns_empty_on_impossible_goal(self):
+        # wall completely blocks the goal
+        m = np.zeros((10, 10), dtype=np.uint8)
+        for y in range(10):
+            m[y, 5] = 1   # vertical wall with no gap
+        planner = AStarImplementation(
+            world_map=m,
+            start_coords=PixelCoords(1, 5),
+            goal_coords=PixelCoords(8, 5),
+            iter_limit=10000,
+            inflated_map=m.copy(),
+        )
+        path, _ = planner.plan()
+        assert path == [], "Expected empty path when goal unreachable"
