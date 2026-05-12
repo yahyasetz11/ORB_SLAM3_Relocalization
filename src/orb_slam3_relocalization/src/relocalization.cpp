@@ -454,7 +454,7 @@ namespace Relocalization
         return cv::Point2f(x, y);
     }
 
-    LocationResult RelocalizationModule::processFrame(const cv::Mat &frame)
+    LocationResult RelocalizationModule::processFrame(const cv::Mat &frame, double timestamp)
     {
         LocationResult result;
         result.success = false;
@@ -677,7 +677,8 @@ namespace Relocalization
 
             std::cout << "\n--- Frame " << frameCount << " ---" << std::endl;
 
-            auto result = processFrame(frame);
+            double video_ts = cap.get(cv::CAP_PROP_POS_MSEC) / 1000.0;
+            auto result = processFrame(frame, video_ts);
 
             if (result.success)
             {
@@ -764,6 +765,15 @@ namespace Relocalization
                                     cv::Point(30, 70),
                                     cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255), 1);
 
+                        if (video_ts > 0.0)
+                        {
+                            std::ostringstream ts;
+                            ts << "t=" << std::fixed << std::setprecision(3) << video_ts << "s";
+                            cv::putText(combined, ts.str(),
+                                        cv::Point(30, 95),
+                                        cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(200, 200, 200), 1);
+                        }
+
                         cv::imshow("Relocalization: Video + Map", combined);
 
                         int key = cv::waitKey(1);
@@ -810,6 +820,8 @@ namespace Relocalization
         std::cout << "\n=== Processing webcam (device " << cameraId << ") ===" << std::endl;
         std::cout << "Press ESC to stop" << std::endl;
 
+        auto webcam_start = std::chrono::steady_clock::now();
+
         while (true)
         {
             if (!cap.read(frame) || frame.empty())
@@ -822,7 +834,10 @@ namespace Relocalization
             if (frameCount % mFrameSkip != 0)
                 continue;
 
-            auto result = processFrame(frame);
+            double elapsed = std::chrono::duration<double>(
+                                 std::chrono::steady_clock::now() - webcam_start)
+                                 .count();
+            auto result = processFrame(frame, elapsed);
 
             if (result.success)
                 successCount++;
@@ -894,6 +909,14 @@ namespace Relocalization
                         cv::putText(combined, info.str(),
                                     cv::Point(30, 70), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255), 1);
 
+                        if (elapsed > 0.0)
+                        {
+                            std::ostringstream ts;
+                            ts << "t=" << std::fixed << std::setprecision(3) << elapsed << "s";
+                            cv::putText(combined, ts.str(),
+                                        cv::Point(30, 95), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(200, 200, 200), 1);
+                        }
+
                         cv::imshow("Relocalization: Webcam + Map", combined);
                     }
                     else
@@ -905,6 +928,14 @@ namespace Relocalization
 
                         cv::putText(combined, "SEARCHING...",
                                     cv::Point(30, 40), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 100, 255), 2);
+
+                        if (elapsed > 0.0)
+                        {
+                            std::ostringstream ts;
+                            ts << "t=" << std::fixed << std::setprecision(3) << elapsed << "s";
+                            cv::putText(combined, ts.str(),
+                                        cv::Point(30, 70), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(200, 200, 200), 1);
+                        }
 
                         cv::imshow("Relocalization: Webcam + Map", combined);
                     }
@@ -1280,6 +1311,7 @@ namespace Relocalization
             Eigen::Matrix<double, 6, 1> b = Eigen::Matrix<double, 6, 1>::Zero();
             double new_cost = 0.0;
 
+            int valid_pts = 0;
             for (int i = 0; i < n; ++i)
             {
                 Eigen::Vector3d Xw(points3D[i].x, points3D[i].y, points3D[i].z);
@@ -1301,14 +1333,25 @@ namespace Relocalization
                 // GN: H δξ = Σ w Jᵀ r  (valid when J = +∂proj/∂ξ, r = obs-proj)
                 b += w * J.transpose() * r;
                 new_cost += w * r.squaredNorm();
+                ++valid_pts;
             }
 
-            // LM damping
+            if (valid_pts < 4)
+                break;
+
+            // LM damping — additive identity term prevents singular H when a DOF is unobservable
             Eigen::Matrix<double, 6, 6> H_damped = H;
             for (int k = 0; k < 6; ++k)
-                H_damped(k, k) += lambda * H(k, k);
+                H_damped(k, k) += lambda * std::max(H(k, k), 1e-8);
 
             Eigen::Matrix<double, 6, 1> delta = H_damped.ldlt().solve(b);
+
+            if (!delta.allFinite())
+            {
+                lambda *= 10.0;
+                result.iterations = iter + 1;
+                continue;
+            }
 
             Sophus::SE3d T_new = Sophus::SE3d::exp(delta) * T_cw;
 

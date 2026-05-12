@@ -72,7 +72,7 @@ namespace Relocalization
         ~RelocalizationModule();
 
         bool loadMap();
-        LocationResult processFrame(const cv::Mat &frame);
+        LocationResult processFrame(const cv::Mat &frame, double timestamp = 0.0);
         void processVideo(const std::string &videoPath, bool visualize = true);
         void processWebcam(int cameraId = 0);
         void debugStatus();

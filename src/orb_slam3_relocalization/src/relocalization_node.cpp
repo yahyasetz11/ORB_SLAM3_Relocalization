@@ -156,6 +156,7 @@ public:
         const float kpScale = (float)displaySize.width / processSize.width;
 
         int frame_count = 0;
+        double start_timestamp = 0.0;
 
         RCLCPP_INFO(get_logger(), "Waiting for frames on /camera/image_raw ...");
 
@@ -176,7 +177,7 @@ public:
             }
 
             frame_count++;
-            auto result = reloc_->processFrame(frame);
+            auto result = reloc_->processFrame(frame, frame_timestamp);
 
             // ── Landmark keypoint segmentation ───────────────────────────────
             // Scale YOLO bbox coords (640x480) → process resolution
@@ -472,6 +473,17 @@ public:
                                 landmarkColor, 1);
                 }
 
+                if (frame_timestamp > 0.0)
+                {
+                    if (start_timestamp == 0.0)
+                        start_timestamp = frame_timestamp;
+                    std::ostringstream ts;
+                    ts << "t=" << std::fixed << std::setprecision(3)
+                       << (frame_timestamp - start_timestamp) << "s";
+                    cv::putText(combined, ts.str(),
+                                cv::Point(30, 100), cv::FONT_HERSHEY_SIMPLEX, 0.4,
+                                cv::Scalar(200, 200, 200), 1);
+                }
                 cv::imshow("Relocalization Node: Camera + Map", combined);
                 int key = cv::waitKey(1);
                 if (key == 27)
