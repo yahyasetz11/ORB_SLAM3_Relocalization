@@ -146,29 +146,21 @@ def euclidean_distance(start: PathNode, goal: PathNode) -> float:
 
 # World transform ======================================================
 
-def inflated_obstacles(occupancy_map:NDArray, inflation_radius:int, start: PixelCoords, goal:PixelCoords):
-    directions = [
-        (0, 0),
-        (0, 1), (1, 0), (0, -1), (-1, 0),     
-        (1, 1), (1, -1), (-1, 1), (-1, -1)    
-    ]
-    grid_height, grid_width = occupancy_map.shape[:2]
-    new_map = occupancy_map.copy()
-    
-    for r in range(1, inflation_radius):
-        scaled_directions = [(dx * r, dy * r) for dx, dy in directions]
-        
-        for yy in range(grid_height):
-            for xx in range(grid_width):
-                if occupancy_map[yy, xx] == 1:
-                    for dx, dy in scaled_directions:
-                    
-                        coordinates = PixelCoords(xx+dx, yy+dy)
-                        if coordinates != start and coordinates != goal:
-                            if is_in_bounds(coordinates, occupancy_map):
-                                new_map[yy+dy, xx+dx] = 1
-                                
-    return new_map  
+def inflated_obstacles(
+    occupancy_map: NDArray,
+    inflation_radius: int,
+    start: Optional[PixelCoords] = None,
+    goal: Optional[PixelCoords] = None,
+) -> NDArray:
+    size = 2 * inflation_radius - 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    inflated = cv2.dilate(occupancy_map.astype(np.uint8), kernel)
+    inflated = inflated.astype(occupancy_map.dtype)
+    if start is not None:
+        inflated[start.y_coords, start.x_coords] = 0
+    if goal is not None:
+        inflated[goal.y_coords, goal.x_coords] = 0
+    return inflated  
 
 def world_2_occupancy_map(world_map:NDArray, start: PixelCoords, goal: PixelCoords, inflation_radius:int=5):
 
