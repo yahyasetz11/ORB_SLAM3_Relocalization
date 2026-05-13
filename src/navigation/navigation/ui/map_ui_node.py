@@ -258,16 +258,20 @@ class MapUINode(Node):
             self.show_status('[GOAL] No map loaded yet', 'warn')
             return
         map_h, map_w = self.current_img.shape[:2]
-        goal_x = int((px / img_w) * map_w)
-        goal_y = int((py / img_h) * map_h)
+        # px is horizontal (column ↔), py is vertical from top (row ↓)
+        col = int((px / img_w) * map_w)
+        row = int((py / img_h) * map_h)
+        # publish in user coords: origin bottom-left, X upward, Y rightward
+        user_x = map_h - 1 - row
+        user_y = col
         now = self.get_clock().now().to_msg()
         goal_msg = PointStamped()
         goal_msg.header.stamp    = now
         goal_msg.header.frame_id = 'map'
-        goal_msg.point.x         = float(goal_x)
-        goal_msg.point.y         = float(goal_y)
+        goal_msg.point.x         = float(user_x)
+        goal_msg.point.y         = float(user_y)
         self.goal_pub.publish(goal_msg)
-        self.show_status(f'[GOAL] Set goal ({goal_x}, {goal_y}) px', 'success')
+        self.show_status(f'[GOAL] Set goal (x={user_x}, y={user_y})', 'success')
 
     # ── Status bar ────────────────────────────────────────────────────────────
 

@@ -80,8 +80,32 @@ You can switch maps at runtime by typing a different name and pressing Enter aga
 
 ### 6. Send the robot's current position
 
-`navigation_node` listens on `current_position` (`PointStamped`, pixel coordinates).  
-In the full pipeline this is wired to the relocalization node output. The `position_publisher` node included in `nav.launch.py` is a placeholder stub for testing.
+`navigation_node` supports two pose sources, configured via `navigation_params.yaml`:
+
+| `pose_source` | Topic | Message type | Use case |
+|---|---|---|---|
+| `"dummy"` (default) | `current_position` | `PointStamped` | Testing — `position_publisher` stub sends clicks |
+| `"relocalization"` | `/relocalization/pose` | `geometry_msgs/Pose` | Full pipeline — live ORB-SLAM3 output |
+
+To switch to live relocalization poses, edit `src/navigation/navigation/config/navigation_params.yaml`:
+
+```yaml
+navigation_node:
+  ros__parameters:
+    pose_source: "relocalization"
+    pose_scale: 1.0   # multiply Pose.position.x/y by this to get pixel coords
+```
+
+Then rebuild once:
+
+```bash
+colcon build --symlink-install --packages-select navigation
+```
+
+The node logs which source is active at startup:
+```
+[navigation_node] Pose source: /relocalization/pose
+```
 
 ---
 
@@ -103,7 +127,8 @@ No map file needed — the fake publisher generates the occupancy grid in memory
 |---|---|---|---|
 | `/map_name` | `std_msgs/String` | UI → map_publisher | Map filename (no extension) — sent by the UI text box |
 | `/map_image` | `sensor_msgs/Image` | map_publisher → | Occupancy grid as a BGR image |
-| `current_position` | `geometry_msgs/PointStamped` | → navigation_node | Robot pixel position in the grid |
+| `current_position` | `geometry_msgs/PointStamped` | → navigation_node | Robot pixel position — used when `pose_source: "dummy"` |
+| `/relocalization/pose` | `geometry_msgs/Pose` | → navigation_node | Live relocalization pose — used when `pose_source: "relocalization"` |
 | `goal_position` | `geometry_msgs/PointStamped` | → navigation_node | Goal pixel position in the grid |
 | `smooth_path` | `nav_msgs/Path` | navigation_node → | Planned and smoothed path |
 | `static_image` | `sensor_msgs/Image` | navigation_node → | Grid image without path |
@@ -138,6 +163,37 @@ After adding a new CSV, run `colcon build --symlink-install --packages-select na
 4. **Grid projection** — projects X and Z (ignores Y/height) onto a 2-D grid at 0.02 m/cell resolution.
 5. **Smoothing** — dilates with a 7×7 kernel then Gaussian blur, then re-thresholds.
 6. **Save PNG** alongside the CSV for fast reloading.
+
+---
+
+## Configuration (`navigation_params.yaml`)
+
+Runtime parameters are set in `src/navigation/navigation/config/navigation_params.yaml` and are loaded automatically by `nav.launch.py`:
+
+```yaml
+navigation_node:
+  ros__parameters:
+    pose_source: "dummy"    # "dummy" | "relocalization"
+    pose_scale: 1.0         # Pose.position.x/y * scale → pixel coords
+```
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `pose_source` | `"dummy"` | `"dummy"` = subscribe to `current_position` (PointStamped); `"relocalization"` = subscribe to `/relocalization/pose` (Pose) |
+| `pose_scale` | `1.0` | Multiplier applied to `Pose.position.x/y` when converting to pixel coordinates — use to rescale if the coordinate frames differ |
+
+After changing the YAML, rebuild once (`colcon build --symlink-install --packages-select navigation`) so the installed copy is updated.
+
+---
+
+## A* Performance
+
+The planner is optimised to avoid per-plan computation:
+
+- **Obstacle inflation** runs once in `map_callback` (when the map arrives) using `cv2.dilate` with a MORPH_RECT kernel. The result is cached and reused for every planning call.
+- **A\* open list** uses a `heapq` with lazy deletion — O(log n) extraction instead of O(n) linear scan.
+
+In practice this means planning on a 200×200 grid completes in milliseconds rather than seconds.
 
 ---
 

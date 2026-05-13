@@ -5,8 +5,10 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PointStamped
 
-START = (15,  85)
-END   = (132, 89)
+# Positions in user coordinate system: origin bottom-left, X upward, Y rightward
+# user_x = map_height - 1 - pixel_row,  user_y = pixel_col
+START = (25,  15)   # was pixel (col=15,  row=85)  on a 111-tall map
+END   = (21, 132)   # was pixel (col=132, row=89)
 HZ    = 10.0       # publish rate
 STEPS = 60         # ticks to travel one way  (6 s per leg)
 
