@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
@@ -31,26 +32,37 @@ class MapPublisherNode(Node):
         self.image_msg = None
 
         self.publisher = self.create_publisher(Image, "/map_image", 10)
+        self.meta_pub  = self.create_publisher(String, "/map_meta",  10)
         self.create_subscription(String, "/map_name", self.map_name_callback, 10)
         self.create_timer(1.0, self.publish_map)
+        self.map_meta: dict = {}   # {x_min, z_min, resolution}
 
     def map_name_callback(self, msg):
         map_name = msg.data
-        map_path = os.path.join(self.map_dir, f"{map_name}.png")
+        map_path  = os.path.join(self.map_dir, f"{map_name}.png")
+        meta_path = os.path.join(self.map_dir, f"{map_name}.meta.json")
 
         if os.path.exists(map_path):
             self.image_msg = self.load(map_name)
+            if os.path.exists(meta_path):
+                with open(meta_path) as f:
+                    self.map_meta = json.load(f)
+                self.get_logger().info(
+                    f'Map meta loaded: x_min={self.map_meta["x_min"]:.4f}, '
+                    f'z_min={self.map_meta["z_min"]:.4f}, res={self.map_meta["resolution"]}'
+                )
         else:
-            csv_path = os.path.join(self.map_dir, f"{map_name}.csv")
+            csv_path   = os.path.join(self.map_dir, f"{map_name}.csv")
             resolution = self.get_parameter("resolution").get_parameter_value().double_value
 
             points = self.load_points(csv_path)
             points = self.filter_by_height(points)
             points = self.filter_outliers(points)
-            grid = self.points_to_grid(points, resolution)
+            grid = self.points_to_grid(points, resolution)   # sets self.map_meta
             smooth_grid = self.smooth_map(grid)
             self.image_msg = self.grid_to_image_msg(smooth_grid)
             self.save(map_name)
+            self.save_meta(map_name, meta_path)
 
     def load(self, map_name):
         map_path = os.path.join(self.map_dir, f"{map_name}.png")
@@ -86,8 +98,12 @@ class MapPublisherNode(Node):
         x_points = points[:, 0]
         z_points = points[:, 2]
 
-        x_points = x_points - np.min(x_points)
-        z_points = z_points - np.min(z_points)
+        x_min = float(np.min(x_points))
+        z_min = float(np.min(z_points))
+        self.map_meta = {'x_min': x_min, 'z_min': z_min, 'resolution': resolution}
+
+        x_points = x_points - x_min
+        z_points = z_points - z_min
 
         xi = (x_points / resolution).astype(int)
         zi = (z_points / resolution).astype(int)
@@ -95,6 +111,16 @@ class MapPublisherNode(Node):
         grid = np.zeros((np.max(zi) + 1, np.max(xi) + 1), dtype=np.uint8)
         grid[zi, xi] = 255
         return grid
+
+    def save_meta(self, map_name, meta_path):
+        if not self.map_meta:
+            return
+        with open(meta_path, 'w') as f:
+            json.dump(self.map_meta, f)
+        self.get_logger().info(
+            f'Map meta saved: x_min={self.map_meta["x_min"]:.4f}, '
+            f'z_min={self.map_meta["z_min"]:.4f}, res={self.map_meta["resolution"]}'
+        )
 
     def smooth_map(self, grid):
         kernel = np.ones((7, 7), np.uint8)
@@ -113,6 +139,10 @@ class MapPublisherNode(Node):
         if self.image_msg is None:
             return
         self.publisher.publish(self.image_msg)
+        if self.map_meta:
+            meta_msg = String()
+            meta_msg.data = json.dumps(self.map_meta)
+            self.meta_pub.publish(meta_msg)
 
 def main(args=None):
     rclpy.init(args=args)

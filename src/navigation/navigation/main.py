@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # navigation/navigation/main.py
 
+import json
 import numpy as np
 import cv2
 
@@ -11,6 +12,7 @@ from cv_bridge import CvBridge
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped, PointStamped, Pose
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 from collections import deque
 from typing import List, Optional
 
@@ -26,6 +28,8 @@ class NavigationNode(Node):
         # Subscriptions
         self.map_sub = self.create_subscription(
             Image, '/map_image', self.map_callback, 10)
+        self.meta_sub = self.create_subscription(
+            String, '/map_meta', self.meta_callback, 10)
         self.goal_sub = self.create_subscription(
             PointStamped, 'goal_position', self.goal_callback, 10)
         self.declare_parameter('pose_source', 'dummy')
@@ -56,6 +60,11 @@ class NavigationNode(Node):
         self.goal_coords = None
         self.smooth_path = None
         self.bridge = CvBridge()
+
+        # Map metadata (from /map_meta) — used by relocalization pose conversion
+        self._map_x_min = 0.0
+        self._map_z_min = 0.0
+        self._map_resolution = 0.02   # metres per pixel (map_publisher default)
         
         # Visualization
         self.static_base = None       # grid image, built once
@@ -91,6 +100,15 @@ class NavigationNode(Node):
 
         self.publish_trails()
 
+    def meta_callback(self, msg: String):
+        try:
+            meta = json.loads(msg.data)
+            self._map_x_min     = meta['x_min']
+            self._map_z_min     = meta['z_min']
+            self._map_resolution = meta['resolution']
+        except Exception as e:
+            self.get_logger().warn(f'Bad /map_meta message: {e}')
+
     def goal_callback(self, msg: PointStamped):
         if self.world_map is None:
             self.get_logger().warn('Map not received yet, ignoring goal.')
@@ -98,7 +116,9 @@ class NavigationNode(Node):
         if self.current_position is None:
             self.get_logger().warn('No position yet, ignoring goal.')
             return
-        coords = PixelCoords(int(msg.point.x), int(msg.point.y))
+        # msg.point.x = user X (upward), msg.point.y = user Y (rightward), origin bottom-left
+        map_h = self.world_map.shape[0]
+        coords = PixelCoords(int(msg.point.y), map_h - 1 - int(msg.point.x))
         snapped = self.snap_to_free(coords)
         if snapped is None:
             self.get_logger().warn('No free cell near goal — ignoring.')
@@ -110,7 +130,9 @@ class NavigationNode(Node):
     def position_callback(self, msg: PointStamped):
         if self.world_map is None:
             return
-        self.current_position = PixelCoords(int(msg.point.x), int(msg.point.y))
+        # msg.point.x = user X (upward), msg.point.y = user Y (rightward), origin bottom-left
+        map_h = self.world_map.shape[0]
+        self.current_position = PixelCoords(int(msg.point.y), map_h - 1 - int(msg.point.x))
 
         # update trail and publish new frame
         self.publish_trails(self.current_position)
@@ -124,9 +146,14 @@ class NavigationNode(Node):
     def relocalization_pose_callback(self, msg: Pose):
         if self.world_map is None:
             return
-        x = int(msg.position.x * self._pose_scale)
-        y = int(msg.position.y * self._pose_scale)
-        current = PixelCoords(x, y)
+        # Convert ORB-SLAM3 world coords to map pixel coords using map metadata.
+        # map_publisher builds the grid as: col=(world_x - x_min)/res, row=(world_z - z_min)/res
+        map_h, map_w = self.world_map.shape
+        col = int((msg.position.x - self._map_x_min) / self._map_resolution)
+        row = int((msg.position.z - self._map_z_min) / self._map_resolution)
+        col = max(0, min(map_w - 1, col))
+        row = max(0, min(map_h - 1, row))
+        current = PixelCoords(col, row)
         self.current_position = current
 
         self.publish_trails(current)
