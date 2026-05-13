@@ -76,6 +76,7 @@ class NavigationNode(Node):
 
     def map_callback(self, msg: Image):
         img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        img = cv2.flip(img, 0)   # flip vertically so forward (Z↑) = up on screen
 
         # convert to binary grid for A*
         # white (255) = wall = 1, black (0) = free = 0
@@ -150,7 +151,8 @@ class NavigationNode(Node):
         # map_publisher builds the grid as: col=(world_x - x_min)/res, row=(world_z - z_min)/res
         map_h, map_w = self.world_map.shape
         col = int((msg.position.x - self._map_x_min) / self._map_resolution)
-        row = int((msg.position.z - self._map_z_min) / self._map_resolution)
+        # map is flipped vertically: large Z (forward) = small row = top of screen
+        row = map_h - 1 - int((msg.position.z - self._map_z_min) / self._map_resolution)
         col = max(0, min(map_w - 1, col))
         row = max(0, min(map_h - 1, row))
         current = PixelCoords(col, row)
