@@ -71,6 +71,7 @@ class NavigationNode(Node):
         self.path_base = None       # static_base + current path
         self.trail = deque(maxlen=500)
         self.inflated_map_raw: Optional[np.ndarray] = None
+        self._last_heading = -np.pi / 2  # default: facing up on screen
 
     # ── Subscribers ────────────────────────────────────────────────────────────
 
@@ -239,18 +240,22 @@ class NavigationNode(Node):
         if current_position is not None:
             cx, cy = current_position.x_coords, current_position.y_coords
             # determine heading: prefer trail direction, fall back to next path node
-            angle = 0.0
+            angle = self._last_heading
             if len(self.trail) >= 2:
-                px, py = self.trail[-2]
+                # look back up to 10 steps for a stable direction baseline
+                lookback = min(10, len(self.trail) - 1)
+                px, py = self.trail[-(lookback + 1)]
                 dx, dy = cx - px, cy - py
-                if dx != 0 or dy != 0:
+                if dx * dx + dy * dy >= 4:  # require at least 2 px net movement
                     angle = np.arctan2(dy, dx)
+                    self._last_heading = angle
             elif self.smooth_path and len(self.smooth_path) > 1:
                 nx = self.smooth_path[1].coords.x_coords
                 ny = self.smooth_path[1].coords.y_coords
                 dx, dy = nx - cx, ny - cy
                 if dx != 0 or dy != 0:
                     angle = np.arctan2(dy, dx)
+                    self._last_heading = angle
             # pointy triangle: tip forward, wide base behind
             tip_len, half_base = 9, 4
             local = np.array([[tip_len, 0], [-tip_len // 2, -half_base], [-tip_len // 2, half_base]], dtype=np.float32)
