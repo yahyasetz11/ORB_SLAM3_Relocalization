@@ -181,6 +181,23 @@ def reconstruct_path(goal_node: PathNode) -> List[PathNode]:
         
     return path_list[::-1] 
 
+def shortcut_path(path: List[PathNode], occupancy_map: NDArray) -> List[PathNode]:
+    """Greedy line-of-sight shortcutting — removes nodes bypassed by a clear straight line."""
+    if len(path) < 3:
+        return path
+    result = [path[0]]
+    i = 0
+    while i < len(path) - 1:
+        j = len(path) - 1
+        while j > i + 1:
+            if check_collision_free(occupancy_map, path[i], path[j]):
+                break
+            j -= 1
+        result.append(path[j])
+        i = j
+    return result
+
+
 def natural_cubic_spline(t, value):
     if len(t) != len(value):
         raise ValueError("t and value must have the same length")
@@ -292,10 +309,29 @@ def reduce_straight_regions(turn_indices, path_length, interval):
     return straight
 
 
+def resample_path_uniform(path: List[PathNode], spacing: float = 3.0) -> List[PathNode]:
+    """Resample path to uniform pixel spacing so turn detection isn't biased by uneven node density."""
+    if len(path) < 2:
+        return path
+    result = [path[0]]
+    carry = 0.0
+    for i in range(1, len(path)):
+        dx = path[i].coords.x_coords - path[i-1].coords.x_coords
+        dy = path[i].coords.y_coords - path[i-1].coords.y_coords
+        seg_len = np.sqrt(dx*dx + dy*dy)
+        carry += seg_len
+        if carry >= spacing:
+            result.append(path[i])
+            carry = 0.0
+    if result[-1] is not path[-1]:
+        result.append(path[-1])
+    return result
+
+
 def generate_adaptive_waypoints(path_coords,
-                                straight_interval=20,
-                                turn_threshold=15.0,
-                                turn_density=5):
+                                straight_interval=15,
+                                turn_threshold=8.0,
+                                turn_density=10):
     length = len(path_coords)
     turn_indices = turn_region(path_coords, turn_threshold)
     turn_indices = expand_turn_regions(turn_indices, length, turn_density)
@@ -309,60 +345,56 @@ def smooth_path_generation(
     straight_interval=20,
     turn_density=5,
     num_points: int = 300,
+    occupancy_map: Optional[NDArray] = None,
 ) -> List[PathNode]:
-    # 1. validate path length
     if len(path_coords) < 4:
         return []
 
-    # 2. downsample to sparse control points so the spline curves freely
-    #    instead of being forced through every grid pixel
-    # indices = np.linspace(0, len(path_coords) - 1, num_control_points, dtype=int)
-    # control = [path_coords[i] for i in indices]
+    if occupancy_map is not None:
+        path_coords = shortcut_path(path_coords, occupancy_map)
+        if len(path_coords) < 4:
+            return []
+
+    path_coords = resample_path_uniform(path_coords, spacing=3.0)
+    if len(path_coords) < 4:
+        return []
+
     control = generate_adaptive_waypoints(path_coords, straight_interval, turn_density)
-    
-    if len(control) < 4:
+    if len(control) < 2:
         return []
 
-    # 3. extract x and y from control points
-    xs = [node.coords.x_coords for node in control]
-    ys = [node.coords.y_coords for node in control]
+    # Chaikin corner-cutting subdivision: approximating B-spline.
+    # Unlike the cubic spline it does NOT interpolate control points, so it
+    # cannot oscillate through A* zigzag pixels (fixes lateral drift) and it
+    # rounds every corner into a proper arc instead of tracing the staircase
+    # (fixes hexagonal-looking turns).  4 passes gives strong smoothing.
+    pts = [(n.coords.x_coords, n.coords.y_coords) for n in control]
+    for _ in range(4):
+        new_pts = [pts[0]]
+        for i in range(len(pts) - 1):
+            x0, y0 = pts[i]
+            x1, y1 = pts[i + 1]
+            new_pts.append((0.75*x0 + 0.25*x1, 0.75*y0 + 0.25*y1))
+            new_pts.append((0.25*x0 + 0.75*x1, 0.25*y0 + 0.75*y1))
+        new_pts.append(pts[-1])
+        pts = new_pts
 
-    # 4. compute parameter t as cumulative arc length over control points
-    t = [0.0]
-    for i in range(1, len(xs)):
-        dist = np.sqrt((xs[i] - xs[i-1])**2 + (ys[i] - ys[i-1])**2)
-        t.append(t[-1] + dist)
+    # uniform arc-length resample to num_points
+    arc = [0.0]
+    for i in range(len(pts) - 1):
+        dx, dy = pts[i+1][0] - pts[i][0], pts[i+1][1] - pts[i][1]
+        arc.append(arc[-1] + np.sqrt(dx*dx + dy*dy))
 
-    # deduplicate coincident points that would break strict-increasing requirement
-    unique = [0]
-    for i in range(1, len(t)):
-        if t[i] > t[unique[-1]]:
-            unique.append(i)
-    if len(unique) < 4:
-        return []
-    t  = [t[i]  for i in unique]
-    xs = [xs[i] for i in unique]
-    ys = [ys[i] for i in unique]
-
-    # 5. sample densely along the full arc length
-    t_sampled = np.linspace(t[0], t[-1], num_points).tolist()
-
-    # 6. fit splines
-    ax, bx, cx, dx = natural_cubic_spline(t, xs)
-    ay, by, cy, dy = natural_cubic_spline(t, ys)
-
-    def _eval(a, b, c, d, t_knots, tq):
-        n = len(t_knots) - 1
-        i = min(n - 1, max(0, int(np.searchsorted(t_knots, tq, side='right')) - 1))
-        dt = tq - t_knots[i]
-        return a[i] + b[i]*dt + c[i]*dt**2 + d[i]*dt**3
-
-    # 7. rebuild smoothed path
     smoothed = []
-    for tq in t_sampled:
-        x_s = _eval(ax, bx, cx, dx, t, tq)
-        y_s = _eval(ay, by, cy, dy, t, tq)
-        smoothed.append(PathNode(PixelCoords(x_s, y_s)))
+    j = 0
+    for d in np.linspace(0.0, arc[-1], num_points):
+        while j < len(arc) - 2 and arc[j + 1] < d:
+            j += 1
+        seg = arc[j + 1] - arc[j]
+        t = (d - arc[j]) / seg if seg > 0 else 0.0
+        x = pts[j][0] + t * (pts[j+1][0] - pts[j][0])
+        y = pts[j][1] + t * (pts[j+1][1] - pts[j][1])
+        smoothed.append(PathNode(PixelCoords(x, y)))
 
     return smoothed
 

@@ -67,7 +67,7 @@ class AStarImplementation(Planner):
         for n_node in neighbor_nodes:
             if n_node in self.visited_nodes:
                 continue
-            g_new = self.g_costs[current_node] + euclidean_distance(current_node, n_node)
+            g_new = self.g_costs[current_node] + 1.0
             if n_node not in self.g_costs or g_new < self.g_costs[n_node]:
                 n_node.parent = current_node
                 n_node.g_cost = g_new

@@ -73,6 +73,11 @@ class NavigationNode(Node):
         self.inflated_map_raw: Optional[np.ndarray] = None
         self._last_heading = -np.pi / 2  # default: facing up on screen
 
+        # Goal tracking
+        self.has_active_goal = False
+        self.show_goal_reached = False
+        self._goal_reached_frames = 0
+
     # ── Subscribers ────────────────────────────────────────────────────────────
 
     def map_callback(self, msg: Image):
@@ -127,6 +132,8 @@ class NavigationNode(Node):
             return
         self.goal_coords = snapped
         self.start_coords = self.current_position
+        self.has_active_goal = True
+        self.show_goal_reached = False
         self.try_plan()
 
     def position_callback(self, msg: PointStamped):
@@ -139,11 +146,27 @@ class NavigationNode(Node):
         # update trail and publish new frame
         self.publish_trails(self.current_position)
 
-        # check if robot has deviated from planned path
-        if self.check_deviation(self.current_position):
-            self.get_logger().info('Deviation detected — replanning from current position...')
-            self.start_coords = self.current_position
-            self.try_plan()
+        if self.has_active_goal:
+            if self.check_goal_reached(self.current_position):
+                self.get_logger().info('Goal reached!')
+                self.has_active_goal = False
+                self.show_goal_reached = True
+                self._goal_reached_frames = 20
+                self.smooth_path = None
+                self.trail = deque(maxlen=500)
+                if self.static_base is not None:
+                    self.path_base = self.static_base.copy()
+                    ros_path_img = self.bridge.cv2_to_imgmsg(self.path_base, encoding='bgr8')
+                    ros_path_img.header.stamp = self.get_clock().now().to_msg()
+                    ros_path_img.header.frame_id = 'map'
+                    self.path_image_pub.publish(ros_path_img)
+                return
+
+            # check if robot has deviated from planned path
+            if self.check_deviation(self.current_position):
+                self.get_logger().info('Deviation detected — replanning from current position...')
+                self.start_coords = self.current_position
+                self.try_plan()
 
     def relocalization_pose_callback(self, msg: Pose):
         if self.world_map is None:
@@ -161,10 +184,26 @@ class NavigationNode(Node):
 
         self.publish_trails(current)
 
-        if self.check_deviation(current):
-            self.get_logger().info('Deviation detected — replanning from current position...')
-            self.start_coords = current
-            self.try_plan()
+        if self.has_active_goal:
+            if self.check_goal_reached(current):
+                self.get_logger().info('Goal reached!')
+                self.has_active_goal = False
+                self.show_goal_reached = True
+                self._goal_reached_frames = 20
+                self.smooth_path = None
+                self.trail = deque(maxlen=500)
+                if self.static_base is not None:
+                    self.path_base = self.static_base.copy()
+                    ros_path_img = self.bridge.cv2_to_imgmsg(self.path_base, encoding='bgr8')
+                    ros_path_img.header.stamp = self.get_clock().now().to_msg()
+                    ros_path_img.header.frame_id = 'map'
+                    self.path_image_pub.publish(ros_path_img)
+                return
+
+            if self.check_deviation(current):
+                self.get_logger().info('Deviation detected — replanning from current position...')
+                self.start_coords = current
+                self.try_plan()
 
     # ── Planning ───────────────────────────────────────────────────────────────
 
@@ -193,7 +232,7 @@ class NavigationNode(Node):
             self.get_logger().warn(f'Planning failed: {e}')
             return
 
-        self.smooth_path = smooth_path_generation(path)
+        self.smooth_path = smooth_path_generation(path, occupancy_map=planner.inflated_obstacle_map)
         if not self.smooth_path:
             self.get_logger().warn('Path smoothing returned empty path.')
             return
@@ -264,7 +303,18 @@ class NavigationNode(Node):
             pts = (local @ rot.T + np.array([cx, cy])).astype(np.int32)
             cv2.polylines(path_base_img, [pts], isClosed=True, color=(30, 30, 30), thickness=2, lineType=cv2.LINE_AA)
             cv2.fillPoly(path_base_img, [pts], color=(0, 255, 255), lineType=cv2.LINE_AA)
-        
+
+        if self.show_goal_reached:
+            label = 'Goal Reached'
+            font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1
+            (tw, th), baseline = cv2.getTextSize(label, font, scale, thickness)
+            tx, ty = 6, 6 + th
+            cv2.rectangle(path_base_img, (tx - 3, ty - th - 3), (tx + tw + 3, ty + baseline + 3), (0, 0, 0), -1)
+            cv2.putText(path_base_img, label, (tx, ty), font, scale, (0, 255, 0), thickness, cv2.LINE_AA)
+            self._goal_reached_frames -= 1
+            if self._goal_reached_frames <= 0:
+                self.show_goal_reached = False
+
         ros_trail_img = self.bridge.cv2_to_imgmsg(path_base_img, encoding='bgr8')
         ros_trail_img.header.stamp = self.get_clock().now().to_msg()
         ros_trail_img.header.frame_id = 'map'
@@ -301,6 +351,15 @@ class NavigationNode(Node):
                        self.world_map[ny, nx] == 0:
                         return PixelCoords(nx, ny)
         return None
+
+    def check_goal_reached(self, current_position, threshold=15) -> bool:
+        if self.goal_coords is None:
+            return False
+        dist = np.sqrt(
+            (self.goal_coords.x_coords - current_position.x_coords) ** 2 +
+            (self.goal_coords.y_coords - current_position.y_coords) ** 2
+        )
+        return dist < threshold
 
     def check_deviation(self, current_position, threshold=5) -> bool:
         if self.smooth_path is None:
