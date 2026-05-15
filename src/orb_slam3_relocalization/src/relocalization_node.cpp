@@ -239,8 +239,9 @@ public:
                 }
 
                 // ── Tuning point ─────────────────────────────────────────────
-                // landmark_weight : weight for any YOLO-detected keypoint (default 1.0)
-                // background_weight: weight for all other keypoints          (default 1.0)
+                // Both weights are intentionally equal (1.0) so the baseline
+                // comparison uses uniform LM. To enable semantic weighting, set
+                // background_weight < landmark_weight (e.g. 0.3 / 1.0).
                 // Per-class fine-tuning: edit getSemanticWeight() in relocalization.cpp
                 const float landmark_weight = 1.0f;
                 const float background_weight = 1.0f;
