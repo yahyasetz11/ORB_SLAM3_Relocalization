@@ -215,7 +215,7 @@ public:
                 }
             }
 
-            // ── Weighted PnP (only when landmarks are detected) ───────────────
+            // ── Weighted PnP (runs on every successfully localized frame) ─────
             Relocalization::WeightedPnPResult wpnp;
             wpnp.success = false;
             wpnp.position = {0.0f, 0.0f, 0.0f};
@@ -225,7 +225,7 @@ public:
             wpnp.weightedReprojectionError = 0.0f;
             wpnp.iterations = 0;
 
-            if (!result.inlierIndices.empty() && !result.landmarkRegions.empty())
+            if (!result.inlierIndices.empty())
             {
                 // Filter correspondences to RANSAC inliers only
                 std::vector<cv::Point2f> inlier2D;
