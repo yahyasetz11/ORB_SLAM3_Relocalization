@@ -510,6 +510,36 @@ namespace Relocalization
 
                 if (solvePnP(points3D, points2D, rvec, tvec, inliers))
                 {
+                    // Uniform LM refinement on RANSAC inliers.
+                    // Ensures the standard-PnP baseline uses RANSAC→LM,
+                    // matching the WeightedPnP pipeline so the only variable
+                    // between them is the weight vector.
+                    {
+                        std::vector<cv::Point3f> lm_in3D;
+                        std::vector<cv::Point2f> lm_in2D;
+                        lm_in3D.reserve(inliers.size());
+                        lm_in2D.reserve(inliers.size());
+                        for (int idx : inliers)
+                        {
+                            lm_in3D.push_back(points3D[idx]);
+                            lm_in2D.push_back(points2D[idx]);
+                        }
+                        std::vector<float> uniform_weights(lm_in3D.size(), 1.0f);
+                        WeightedPnPResult lm_result = solvePnPWeighted(
+                            lm_in3D, lm_in2D, uniform_weights, rvec, tvec);
+                        if (lm_result.success)
+                        {
+                            // Remap LM inlier indices from lm_in* space back to points3D space
+                            std::vector<int> remapped;
+                            remapped.reserve(lm_result.inlierIndices.size());
+                            for (int j : lm_result.inlierIndices)
+                                remapped.push_back(inliers[j]);
+                            rvec = lm_result.rvec.clone();
+                            tvec = lm_result.tvec.clone();
+                            inliers = std::move(remapped);
+                        }
+                    }
+
                     float inlierRatio = (float)inliers.size() / points3D.size();
                     float confidence = std::min(100.0f,
                                                 (inlierRatio * 100.0f) +
