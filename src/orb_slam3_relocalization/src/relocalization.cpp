@@ -529,18 +529,10 @@ namespace Relocalization
                         50, 1e-6, 8.0f);
                     if (lm_refined.success)
                     {
-                        // Remap LM inlier indices from lm_in* space back to points3D space
-                        std::vector<int> remapped;
-                        remapped.reserve(lm_refined.inlierIndices.size());
-                        for (int j : lm_refined.inlierIndices)
-                            remapped.push_back(inliers[j]);
                         rvec = lm_refined.rvec;
                         tvec = lm_refined.tvec;
-                        inliers = std::move(remapped);
-                    }
-                    else
-                    {
-                        std::cout << "[processFrame] LM refinement failed — keeping raw RANSAC result\n";
+                        // Keep 'inliers' as RANSAC inliers so result.inlierIndices
+                        // gives node's WPnP the full RANSAC set as input.
                     }
 
                     float inlierRatio = (float)inliers.size() / points3D.size();
@@ -1337,6 +1329,9 @@ namespace Relocalization
         // Levenberg-Marquardt
         double lambda = 1e-3;
         double cost = std::numeric_limits<double>::max();
+        const Sophus::SE3d T_init = T_cw;
+        Sophus::SE3d T_last_good = T_cw;
+        Sophus::SE3d T_prev = T_cw;
 
         for (int iter = 0; iter < maxIterations; ++iter)
         {
@@ -1370,7 +1365,11 @@ namespace Relocalization
             }
 
             if (valid_pts < 4)
+            {
+                T_cw = T_last_good;
                 break;
+            }
+            T_last_good = T_cw;
 
             // LM damping — additive identity term prevents singular H when a DOF is unobservable
             Eigen::Matrix<double, 6, 6> H_damped = H;
@@ -1390,12 +1389,14 @@ namespace Relocalization
 
             if (new_cost < cost)
             {
+                T_prev = T_cw;
                 T_cw = T_new;
                 cost = new_cost;
                 lambda /= 10.0;
             }
             else
             {
+                T_cw = T_prev;
                 lambda *= 10.0;
             }
 
@@ -1434,8 +1435,37 @@ namespace Relocalization
                 inliers.push_back(i);
         }
 
-        if ((int)inliers.size() < mMinInliers)
-            return result;
+        if ((int)inliers.size() < 4)
+        {
+            // LM converged to a bad local minimum — fall back to the initial
+            // (RANSAC) pose, which is guaranteed to have all input points as inliers.
+            inliers.clear();
+            for (int i = 0; i < n; ++i)
+            {
+                Eigen::Vector3d Xw(points3D[i].x, points3D[i].y, points3D[i].z);
+                Eigen::Vector3d Pc = T_init * Xw;
+                if (Pc(2) <= 0)
+                    continue;
+                float u_proj = (float)(fx * Pc(0) / Pc(2) + cx);
+                float v_proj = (float)(fy * Pc(1) / Pc(2) + cy);
+                float du = points2D[i].x - u_proj;
+                float dv = points2D[i].y - v_proj;
+                if (std::sqrt(du * du + dv * dv) < inlierThresholdPx)
+                    inliers.push_back(i);
+            }
+            if ((int)inliers.size() < 4)
+                return result;
+            // Use the initial pose for rvec/tvec extraction below
+            Eigen::Matrix3d R_fb = T_init.rotationMatrix();
+            Eigen::Vector3d t_fb = T_init.translation();
+            for (int i = 0; i < 3; ++i)
+            {
+                for (int j = 0; j < 3; ++j)
+                    R_cv.at<double>(i, j) = R_fb(i, j);
+                t_cv.at<double>(i) = t_fb(i);
+            }
+            cv::Rodrigues(R_cv, rvec_final);
+        }
 
         result.success = true;
         result.rvec = rvec_final.clone();
