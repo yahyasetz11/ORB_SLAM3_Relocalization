@@ -525,7 +525,8 @@ namespace Relocalization
                     }
                     std::vector<float> uniform_weights(lm_in3D.size(), 1.0f);
                     WeightedPnPResult lm_refined = solvePnPWeighted(
-                        lm_in3D, lm_in2D, uniform_weights, rvec, tvec);
+                        lm_in3D, lm_in2D, uniform_weights, rvec, tvec,
+                        50, 1e-6, 8.0f);
                     if (lm_refined.success)
                     {
                         // Remap LM inlier indices from lm_in* space back to points3D space

@@ -251,7 +251,8 @@ public:
 
                 wpnp = reloc_->solvePnPWeighted(
                     inlier3D, inlier2D, weights,
-                    result.rvec, result.tvec);
+                    result.rvec, result.tvec,
+                    50, 1e-6, 8.0f);
 
                 if (wpnp.success)
                 {
