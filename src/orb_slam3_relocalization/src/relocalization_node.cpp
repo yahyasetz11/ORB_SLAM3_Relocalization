@@ -81,11 +81,15 @@ public:
         declare_parameter("config_path", "");
         declare_parameter("visualize", true);
         declare_parameter("use_weighted_pnp", false);
+        declare_parameter("landmark_weight", 1.0f);
+        declare_parameter("background_weight", 0.3f);
 
         vocab_path_ = expandPath(get_parameter("vocab_path").as_string());
         config_path_ = expandPath(get_parameter("config_path").as_string());
         visualize_ = get_parameter("visualize").as_bool();
         use_weighted_pnp_ = get_parameter("use_weighted_pnp").as_bool();
+        landmark_weight_ = get_parameter("landmark_weight").as_double();
+        background_weight_ = get_parameter("background_weight").as_double();
 
         if (vocab_path_.empty() || config_path_.empty())
         {
@@ -103,6 +107,8 @@ public:
         RCLCPP_INFO(get_logger(), "Config          : %s", config_path_.c_str());
         RCLCPP_INFO(get_logger(), "Visualize       : %s", visualize_ ? "yes" : "no");
         RCLCPP_INFO(get_logger(), "PnP mode        : %s", use_weighted_pnp_ ? "weighted" : "standard (OpenCV)");
+        RCLCPP_INFO(get_logger(), "Landmark weight : %.2f", landmark_weight_);
+        RCLCPP_INFO(get_logger(), "Background weight : %.2f", background_weight_);
 
         pose_pub_ = create_publisher<geometry_msgs::msg::Pose>("/relocalization/pose", 10);
 
@@ -243,8 +249,8 @@ public:
                 // comparison uses uniform LM. To enable semantic weighting, set
                 // background_weight < landmark_weight (e.g. 0.3 / 1.0).
                 // Per-class fine-tuning: edit getSemanticWeight() in relocalization.cpp
-                const float landmark_weight = 1.0f;
-                const float background_weight = 1.0f;
+                const float landmark_weight = static_cast<float>(landmark_weight_);
+                const float background_weight = static_cast<float>(background_weight_);
                 std::vector<float> weights = reloc_->assignWeightsFromLandmarks(
                     inlier2D, result.landmarkRegions,
                     landmark_weight, background_weight);
@@ -583,6 +589,8 @@ private:
     bool visualize_;
     bool use_weighted_pnp_;
     bool ready_;
+    float landmark_weight_;
+    float background_weight_;
 
     std::unique_ptr<Relocalization::RelocalizationModule> reloc_;
     rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pose_pub_;
