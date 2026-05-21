@@ -1,0 +1,7 @@
+localization_test_node:
+  ros__parameters:
+    vocab_path: "~/Documents/ORB_SLAM3/Vocabulary/ORBvoc.txt"
+    config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/tum_fr3.yaml"
+    video_path: "~/path/to/your_test_video.mp4"
+    output_csv: "~/Documents/ORB_SLAM3_Relocalization/localization_test_log.csv"
+    mode: "video"

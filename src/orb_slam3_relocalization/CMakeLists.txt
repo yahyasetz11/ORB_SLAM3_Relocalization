@@ -72,6 +72,11 @@ add_executable(map_creator_node src/map_creator_node.cpp)
 target_link_libraries(map_creator_node ${LIBS})
 ament_target_dependencies(map_creator_node rclcpp geometry_msgs)
 
+# ── ROS2 node: localization_test_node ────────────────────────────────────────
+add_executable(localization_test_node src/localization_test_node.cpp)
+target_link_libraries(localization_test_node ${LIBS})
+ament_target_dependencies(localization_test_node rclcpp geometry_msgs)
+
 # ── ROS2 node: relocalization_node ───────────────────────────────────────────
 add_executable(relocalization_node src/relocalization_node.cpp src/relocalization.cpp)
 target_link_libraries(relocalization_node ${LIBS} nlohmann_json::nlohmann_json)
@@ -80,6 +85,7 @@ ament_target_dependencies(relocalization_node rclcpp geometry_msgs std_msgs sens
 # ── Install ROS2 targets ──────────────────────────────────────────────────────
 install(TARGETS
     map_creator_node
+    localization_test_node
     relocalization_node
     DESTINATION lib/${PROJECT_NAME}
 )
