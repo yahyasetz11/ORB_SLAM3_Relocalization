@@ -304,7 +304,7 @@ public:
                 // std_reproj uses ALL matched points (as before)
                 float std_reproj = reloc_->computeMeanReprojError(
                     result.matched3DPoints, result.matched2DPoints,
-                    result.rvec, result.tvec);
+                    std_rvec, std_tvec);
 
                 // std_reproj_inliers_only: reproject only RANSAC inliers
                 float std_reproj_inliers_only = -1.0f;
@@ -320,7 +320,7 @@ public:
                         inlier2D.push_back(result.matched2DPoints[idx]);
                     }
                     std_reproj_inliers_only = reloc_->computeMeanReprojError(
-                        inlier3D, inlier2D, result.rvec, result.tvec);
+                        inlier3D, inlier2D, std_rvec, std_tvec);
                 }
 
                 // pose_delta: use std_position (captured before WPnP may overwrite)
