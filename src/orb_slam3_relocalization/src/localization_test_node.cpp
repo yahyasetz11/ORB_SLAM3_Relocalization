@@ -10,11 +10,13 @@
 
 #include "System.h"
 
-static std::string expandPath(const std::string & path)
+static std::string expandPath(const std::string &path)
 {
-    if (path.empty() || path[0] != '~') return path;
-    const char * home = std::getenv("HOME");
-    if (!home) return path;
+    if (path.empty() || path[0] != '~')
+        return path;
+    const char *home = std::getenv("HOME");
+    if (!home)
+        return path;
     return std::string(home) + path.substr(1);
 }
 
@@ -23,22 +25,22 @@ class LocalizationTestNode : public rclcpp::Node
 public:
     LocalizationTestNode() : Node("localization_test_node"), slam_(nullptr), running_(false)
     {
-        declare_parameter("vocab_path",  "");
+        declare_parameter("vocab_path", "");
         declare_parameter("config_path", "");
-        declare_parameter("video_path",  "");
-        declare_parameter("output_csv",  "localization_test_log.csv");
-        declare_parameter("mode",        "video");
+        declare_parameter("video_path", "");
+        declare_parameter("output_csv", "localization_test_log.csv");
+        declare_parameter("mode", "video");
 
-        vocab_path_  = expandPath(get_parameter("vocab_path").as_string());
+        vocab_path_ = expandPath(get_parameter("vocab_path").as_string());
         config_path_ = expandPath(get_parameter("config_path").as_string());
-        video_path_  = expandPath(get_parameter("video_path").as_string());
-        output_csv_  = expandPath(get_parameter("output_csv").as_string());
-        mode_        = get_parameter("mode").as_string();
+        video_path_ = expandPath(get_parameter("video_path").as_string());
+        output_csv_ = expandPath(get_parameter("output_csv").as_string());
+        mode_ = get_parameter("mode").as_string();
 
         if (vocab_path_.empty() || config_path_.empty())
         {
             RCLCPP_ERROR(get_logger(),
-                "Required parameters missing. Set vocab_path and config_path.");
+                         "Required parameters missing. Set vocab_path and config_path.");
             rclcpp::shutdown();
             return;
         }
@@ -50,7 +52,7 @@ public:
 
         slam_ = new ORB_SLAM3::System(
             vocab_path_, config_path_, ORB_SLAM3::System::MONOCULAR, /*viewer=*/true);
-        slam_->ActivateLocalizationMode();
+        // slam_->ActivateLocalizationMode();
 
         csv_.open(output_csv_);
         if (!csv_.is_open())
@@ -98,7 +100,8 @@ private:
         }
 
         double fps = cap.get(cv::CAP_PROP_FPS);
-        if (fps <= 0.0 || std::isnan(fps)) fps = 30.0;
+        if (fps <= 0.0 || std::isnan(fps))
+            fps = 30.0;
 
         int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
         RCLCPP_INFO(get_logger(), "Video FPS: %.1f  |  Total frames: %d", fps, total_frames);
@@ -124,10 +127,10 @@ private:
             cv::resize(frame, resized, cv::Size(640, 480));
 
             Sophus::SE3f Tcw = slam_->TrackMonocular(resized, timestamp);
-            int  state       = slam_->GetTrackingState();
+            int state = slam_->GetTrackingState();
             // state: -1=SYSTEM_NOT_READY, 0=NO_IMAGES_YET, 1=NOT_INITIALIZED, 2=OK, 3=RECENTLY_LOST, 4=LOST
-            bool localized   = (state == 2);
-            int  n_pts       = static_cast<int>(slam_->GetTrackedMapPoints().size());
+            bool localized = (state == 2);
+            int n_pts = static_cast<int>(slam_->GetTrackedMapPoints().size());
 
             csv_ << std::fixed << std::setprecision(6)
                  << timestamp << "," << state << "," << (localized ? 1 : 0) << ",";
@@ -135,9 +138,9 @@ private:
             if (localized)
             {
                 // Invert Tcw to get camera position in world frame (Twc)
-                Sophus::SE3f       Twc = Tcw.inverse();
-                Eigen::Vector3f    t   = Twc.translation();
-                Eigen::Quaternionf q   = Twc.unit_quaternion();
+                Sophus::SE3f Twc = Tcw.inverse();
+                Eigen::Vector3f t = Twc.translation();
+                Eigen::Quaternionf q = Twc.unit_quaternion();
                 csv_ << t.x() << "," << t.y() << "," << t.z() << ","
                      << q.x() << "," << q.y() << "," << q.z() << "," << q.w();
             }
@@ -150,7 +153,7 @@ private:
             if (frame_count % 30 == 0)
             {
                 RCLCPP_INFO(get_logger(), "Frame %d/%d  t=%.2fs  state=%d  pts=%d",
-                    frame_count, total_frames, timestamp, state, n_pts);
+                            frame_count, total_frames, timestamp, state, n_pts);
             }
 
             timestamp += 1.0 / fps;
@@ -158,7 +161,7 @@ private:
         }
 
         RCLCPP_INFO(get_logger(), "Localization test complete. CSV written to: %s",
-            output_csv_.c_str());
+                    output_csv_.c_str());
         rclcpp::shutdown();
     }
 
@@ -168,13 +171,13 @@ private:
     std::string output_csv_;
     std::string mode_;
 
-    ORB_SLAM3::System * slam_;
-    std::atomic<bool>   running_;
-    std::thread         worker_thread_;
-    std::ofstream       csv_;
+    ORB_SLAM3::System *slam_;
+    std::atomic<bool> running_;
+    std::thread worker_thread_;
+    std::ofstream csv_;
 };
 
-int main(int argc, char ** argv)
+int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<LocalizationTestNode>();
