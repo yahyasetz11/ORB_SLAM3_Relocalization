@@ -129,7 +129,10 @@ public:
             csv_log_ << "frame,timestamp,"
                      << "std_x,std_y,std_z,std_inliers,std_total,std_reproj_px,"
                      << "wpnp_x,wpnp_y,wpnp_z,wpnp_inliers,wpnp_total,wpnp_reproj_px,"
-                     << "wpnp_weighted_cost,pose_delta_m,wpnp_iterations\n";
+                     << "wpnp_weighted_cost,pose_delta_m,wpnp_iterations,"
+                     << "is_localized,result_tx,result_ty,result_tz,"
+                     << "result_qx,result_qy,result_qz,result_qw,"
+                     << "std_reproj_inliers_only\n";
             RCLCPP_INFO(get_logger(), "CSV log: comparison_log.csv");
         }
 
@@ -222,6 +225,11 @@ public:
             }
 
             // ── Weighted PnP (runs on every successfully localized frame) ─────
+            // Capture std PnP position before WPnP may overwrite result.position
+            cv::Point3f std_position = result.position;
+            cv::Mat std_rvec = result.rvec.clone();
+            cv::Mat std_tvec = result.tvec.clone();
+
             Relocalization::WeightedPnPResult wpnp;
             wpnp.success = false;
             wpnp.position = {0.0f, 0.0f, 0.0f};
@@ -293,16 +301,53 @@ public:
             // ── CSV: one row per successfully localized frame ─────────────────
             if (result.success && csv_log_.is_open())
             {
+                // std_reproj uses ALL matched points (as before)
                 float std_reproj = reloc_->computeMeanReprojError(
                     result.matched3DPoints, result.matched2DPoints,
                     result.rvec, result.tvec);
 
-                float dx = wpnp.position.x - result.position.x;
-                float dy = wpnp.position.y - result.position.y;
-                float dz = wpnp.position.z - result.position.z;
+                // std_reproj_inliers_only: reproject only RANSAC inliers
+                float std_reproj_inliers_only = -1.0f;
+                if (!result.inlierIndices.empty())
+                {
+                    std::vector<cv::Point3f> inlier3D;
+                    std::vector<cv::Point2f> inlier2D;
+                    inlier3D.reserve(result.inlierIndices.size());
+                    inlier2D.reserve(result.inlierIndices.size());
+                    for (int idx : result.inlierIndices)
+                    {
+                        inlier3D.push_back(result.matched3DPoints[idx]);
+                        inlier2D.push_back(result.matched2DPoints[idx]);
+                    }
+                    std_reproj_inliers_only = reloc_->computeMeanReprojError(
+                        inlier3D, inlier2D, result.rvec, result.tvec);
+                }
+
+                // pose_delta: use std_position (captured before WPnP may overwrite)
+                float dx = wpnp.position.x - std_position.x;
+                float dy = wpnp.position.y - std_position.y;
+                float dz = wpnp.position.z - std_position.z;
                 float pose_delta = wpnp.success
                                        ? std::sqrt(dx * dx + dy * dy + dz * dz)
                                        : 0.0f;
+
+                // Extract accepted pose as translation + quaternion
+                int   is_localized = result.success ? 1 : 0;
+                float result_tx = 0.0f, result_ty = 0.0f, result_tz = 0.0f;
+                float result_qx = 0.0f, result_qy = 0.0f, result_qz = 0.0f, result_qw = 1.0f;
+
+                if (result.success)
+                {
+                    double qx, qy, qz, qw;
+                    rvecToQuaternion(result.rvec, qx, qy, qz, qw);
+                    result_tx = static_cast<float>(result.tvec.at<double>(0));
+                    result_ty = static_cast<float>(result.tvec.at<double>(1));
+                    result_tz = static_cast<float>(result.tvec.at<double>(2));
+                    result_qx = static_cast<float>(qx);
+                    result_qy = static_cast<float>(qy);
+                    result_qz = static_cast<float>(qz);
+                    result_qw = static_cast<float>(qw);
+                }
 
                 csv_log_ << frame_count << ","
                          << std::fixed << std::setprecision(6) << frame_timestamp << ","
@@ -314,7 +359,12 @@ public:
                          << wpnp.numInliers << "," << wpnp.totalCorrespondences << ","
                          << std::setprecision(4) << wpnp.meanReprojectionError << ","
                          << wpnp.weightedReprojectionError << ","
-                         << pose_delta << "," << wpnp.iterations << "\n";
+                         << pose_delta << "," << wpnp.iterations
+                         << "," << is_localized
+                         << "," << result_tx << "," << result_ty << "," << result_tz
+                         << "," << result_qx << "," << result_qy << "," << result_qz << "," << result_qw
+                         << "," << std_reproj_inliers_only
+                         << "\n";
                 csv_log_.flush();
             }
 
