@@ -9,6 +9,7 @@ error.txt
 .worktrees/
 docs/superpowers/
 CLAUDE.md
+csv/
 *.csv
 
 # OSA map files are too large for git — keep the folder, ignore the files
@@ -20,3 +21,4 @@ tools/map_to_csv/build/
 # Python cache and editor swap files
 __pycache__/
 *.swp
+
