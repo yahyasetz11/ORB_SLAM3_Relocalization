@@ -5,3 +5,5 @@ localization_test_node:
     video_path: "~/Documents/ORB_SLAM3_Relocalization/data/rgbd_dataset_freiburg3_long_office_household_validation/rgbd_dataset_freiburg3_long_office_household_validation_rgb.mp4"
     output_csv: "~/Documents/ORB_SLAM3_Relocalization/localization_test_log.csv"
     mode: "video"
+    timestamp_start: 1341848149.1989 # first timestamp from validation groundtruth.txt (0.0 = start at 0)
+    # timestamp_start: 1341847980.7900 # for tum_fr3_long_office_household, first timestamp from groundtruth.txt

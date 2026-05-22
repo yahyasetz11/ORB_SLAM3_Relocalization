@@ -30,12 +30,14 @@ public:
         declare_parameter("video_path", "");
         declare_parameter("output_csv", "localization_test_log.csv");
         declare_parameter("mode", "video");
+        declare_parameter("timestamp_start", 0.0); // 0.0 = start at 0; otherwise TUM-aligned
 
         vocab_path_ = expandPath(get_parameter("vocab_path").as_string());
         config_path_ = expandPath(get_parameter("config_path").as_string());
         video_path_ = expandPath(get_parameter("video_path").as_string());
         output_csv_ = expandPath(get_parameter("output_csv").as_string());
         mode_ = get_parameter("mode").as_string();
+        timestamp_start_ = get_parameter("timestamp_start").as_double();
 
         if (vocab_path_.empty() || config_path_.empty())
         {
@@ -49,10 +51,10 @@ public:
         RCLCPP_INFO(get_logger(), "Config     : %s", config_path_.c_str());
         RCLCPP_INFO(get_logger(), "Output CSV : %s", output_csv_.c_str());
         RCLCPP_INFO(get_logger(), "Mode       : %s", mode_.c_str());
-
-        slam_ = new ORB_SLAM3::System(
-            vocab_path_, config_path_, ORB_SLAM3::System::MONOCULAR, /*viewer=*/true);
-        // slam_->ActivateLocalizationMode();
+        if (timestamp_start_ > 0.0)
+            RCLCPP_INFO(get_logger(), "Timestamp  : TUM-aligned, start=%.6f", timestamp_start_);
+        else
+            RCLCPP_INFO(get_logger(), "Timestamp  : starts at 0.0");
 
         csv_.open(output_csv_);
         if (!csv_.is_open())
@@ -75,12 +77,12 @@ public:
             worker_thread_.join();
         if (csv_.is_open())
             csv_.close();
-        if (slam_)
-        {
-            slam_->Shutdown();
-            delete slam_;
-            slam_ = nullptr;
-        }
+        // if (slam_)
+        // {
+        //     slam_->Shutdown();
+        //     delete slam_;
+        //     slam_ = nullptr;
+        // }
     }
 
 private:
@@ -99,6 +101,10 @@ private:
             return;
         }
 
+        slam_ = new ORB_SLAM3::System(
+            vocab_path_, config_path_, ORB_SLAM3::System::MONOCULAR, /*viewer=*/true);
+        slam_->ActivateLocalizationMode();
+
         double fps = cap.get(cv::CAP_PROP_FPS);
         if (fps <= 0.0 || std::isnan(fps))
             fps = 30.0;
@@ -108,7 +114,7 @@ private:
 
         cv::Mat frame;
         int frame_count = 0;
-        double timestamp = 0.0;
+        double timestamp = (timestamp_start_ > 0.0) ? timestamp_start_ : 0.0;
 
         while (running_ && rclcpp::ok())
         {
@@ -170,6 +176,7 @@ private:
     std::string video_path_;
     std::string output_csv_;
     std::string mode_;
+    double timestamp_start_ = 0.0;
 
     ORB_SLAM3::System *slam_;
     std::atomic<bool> running_;

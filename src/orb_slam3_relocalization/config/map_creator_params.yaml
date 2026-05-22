@@ -3,7 +3,8 @@ map_creator_node:
     vocab_path: "~/Documents/ORB_SLAM3/Vocabulary/ORBvoc.txt"
     # for tum fr3, use the config file below. For webcam, use webcam_complete.yaml
     config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/tum_fr3.yaml"
-    video_path: "~/Documents/ORB_SLAM3_Relocalization/data/rgbd_dataset_freiburg3_long_office_household/rgbd_dataset_freiburg3_long_office_household_rgb.mp4"
+    # video_path: "~/Documents/ORB_SLAM3_Relocalization/data/rgbd_dataset_freiburg3_long_office_household/rgbd_dataset_freiburg3_long_office_household_rgb.mp4"
+    video_path: "~/Documents/ORB_SLAM3_Relocalization/data/rgbd_dataset_freiburg3_long_office_household_validation/rgbd_dataset_freiburg3_long_office_household_validation_rgb.mp4"
 
     # for webcam
     # config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/webcam_complete.yaml"
