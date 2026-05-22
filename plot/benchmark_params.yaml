@@ -1,0 +1,17 @@
+ORB_SLAM3:
+  tx: -0.4
+  ty: 2.72
+  tz: 1.17
+  roll: 73
+  pitch: 180
+  yaw: -7
+  scale: 2.54
+
+Ours:
+  tx: -1.01
+  ty: 0.6
+  tz: 1.54
+  roll: 59.8
+  pitch: 1
+  yaw: 8.5
+  scale: 1.47
