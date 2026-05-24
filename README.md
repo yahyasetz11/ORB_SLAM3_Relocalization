@@ -284,7 +284,6 @@ ORB_SLAM3_Relocalization/
 ├── media/                          # Result figures and benchmark plots
 ├── maps/                           # Pre-built .osa map files (gitignored — see Drive link)
 ├── data/                           # Datasets (gitignored — see Drive links)
-└── CLAUDE.md                       # Developer notes
 ```
 
 ---
