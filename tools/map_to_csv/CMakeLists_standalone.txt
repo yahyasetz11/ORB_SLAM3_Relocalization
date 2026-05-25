@@ -1,0 +1,46 @@
+cmake_minimum_required(VERSION 3.10)
+project(map_to_csv)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type")
+
+# ── ORB-SLAM3 location ────────────────────────────────────────────────────────
+# Override with:  cmake -DORB_SLAM3_DIR=/your/path ..
+set(ORB_SLAM3_DIR "/home/orange/ORB_SLAM3"
+    CACHE PATH "Path to the ORB-SLAM3 build directory")
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+find_package(OpenCV 4 REQUIRED)
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+# Map.h includes <pangolin/pangolin.h> directly, so we need Pangolin's include
+# dirs at compile time (even though we don't call any Pangolin APIs ourselves).
+find_package(Pangolin REQUIRED)
+
+# ── Include paths ─────────────────────────────────────────────────────────────
+include_directories(
+    ${ORB_SLAM3_DIR}
+    ${ORB_SLAM3_DIR}/include
+    ${ORB_SLAM3_DIR}/include/CameraModels
+    ${ORB_SLAM3_DIR}/Thirdparty/Sophus
+    ${ORB_SLAM3_DIR}/Thirdparty/DBoW2
+    ${ORB_SLAM3_DIR}/Thirdparty/g2o
+    ${EIGEN3_INCLUDE_DIR}
+    ${Pangolin_INCLUDE_DIRS}
+)
+
+# ── Link libraries ────────────────────────────────────────────────────────────
+set(SLAM_LIBS
+    ${OpenCV_LIBS}
+    ${Pangolin_LIBRARIES}
+    ${ORB_SLAM3_DIR}/Thirdparty/DBoW2/lib/libDBoW2.so
+    ${ORB_SLAM3_DIR}/Thirdparty/g2o/lib/libg2o.so
+    ${ORB_SLAM3_DIR}/lib/libORB_SLAM3.so
+    /usr/lib/x86_64-linux-gnu/libboost_serialization.so
+    pthread
+    dl
+)
+
+# ── Target ────────────────────────────────────────────────────────────────────
+add_executable(map_to_csv map_to_csv.cpp)
+target_link_libraries(map_to_csv ${SLAM_LIBS})

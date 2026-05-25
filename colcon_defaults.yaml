@@ -1,0 +1,8 @@
+build:
+  base-paths:
+    - .
+    - src
+list:
+  base-paths:
+    - .
+    - src

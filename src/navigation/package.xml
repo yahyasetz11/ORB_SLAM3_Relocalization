@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>navigation</name>
+  <version>0.0.0</version>
+  <description>ORB-SLAM3 relocalization-based navigation stack with A* planner and UI.</description>
+  <maintainer email="orange@todo.todo">orange</maintainer>
+  <license>TODO: License declaration</license>
+
+  <!-- Build system: switched from ament_python to ament_cmake so that the
+       C++ tool osa_to_csv can live in the same package as the Python nodes. -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <!-- Python runtime dependencies -->
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>python3-numpy</depend>
+  <depend>python3-opencv</depend>
+
+  <!-- C++ dependencies for osa_to_csv (dev tool — not used at runtime) -->
+  <!-- TODO: add <depend>ORB_SLAM3</depend> once a ROS-compatible package exists -->
+  <build_depend>libeigen3-dev</build_depend>
+  <build_depend>libopencv-dev</build_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

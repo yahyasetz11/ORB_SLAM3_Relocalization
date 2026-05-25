@@ -1,0 +1,137 @@
+import cv2
+import os
+import rclpy
+import time
+import json
+
+from ultralytics import YOLO
+from rclpy.node import Node
+from cv_bridge import CvBridge
+from std_msgs.msg import String, Int32MultiArray, Int32
+from sensor_msgs.msg import Image
+
+class BBOX_Coords(Node):
+    def __init__(self):
+        super().__init__('minimal_publisher')
+        # Model init — realpath resolves symlink from install/ back to source
+        pkg_dir = os.path.dirname(os.path.realpath(__file__))
+        self.model_path = os.path.join(pkg_dir, "model", "model1.pt")
+        self.model = YOLO(self.model_path)
+        self.conf_value = 0.5
+        
+        self.results = self.create_publisher(String, 'yolo/results', 10)
+        self.bbox_coords = self.create_publisher(Int32MultiArray, 'bbox_coords', 10)
+
+        self.bridge = CvBridge()
+        self.latest_frame = None
+        self.img_sub = self.create_subscription(
+            Image, '/camera/image_raw', self.image_callback, 10)
+
+        self.frame_id = 0
+        self.DOOR_ID = 164
+
+        self.timer = self.create_timer(0.1, self.detection_callback)
+        self.get_logger().info("Start YOLO Webcam Detection — subscribed to /camera/image_raw")
+
+    def image_callback(self, msg):
+        self.latest_frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+
+    def detection_callback(self):
+        if self.latest_frame is None:
+            return
+        frame = self.latest_frame.copy()
+    
+        detected = self.model.predict(frame, conf=self.conf_value, verbose=False)
+        # results = self.model(frame)[0]
+        detections = []
+    
+        for obj in detected: 
+            for box in obj.boxes:
+                # Extracting the coords (Str->int)
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+
+                # Extrac conf score and cls label
+                conf = float(box.conf[0])
+                cls_id = int(box.cls[0])
+                if cls_id != self.DOOR_ID:
+                    continue
+
+                det = (
+                    {
+                        "cls_id": cls_id,
+                        "conf_score": conf,
+                        "bbox_coords": {
+                            "x1": int(x1),
+                            "y1": int(y1),
+                            "x2": int(x2),
+                            "y2": int(y2)
+                        },
+                        "corner_coords": {
+                            "top_left": [int(x1), int(y1)],
+                            "top_right": [int(x2), int(y1)],
+                            "bot_left": [int(x1), int(y2)],
+                            "bot_right": [int(x2), int(y2)]
+                        }
+                    }
+                )
+                
+                detections.append(det)
+                
+                # Debugging
+                label = f"id:{cls_id} conf:{conf:.2f}"
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                cv2.putText(
+                    frame,
+                    label,
+                    (int(x1), max(20, int(y1) - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    2
+                )
+                # time.sleep(1)
+                
+                # # Coordinates
+                # top_l = (x1, y1)
+                # top_r = (x2, y1)
+                # bot_l = (x1, y2)
+                # bot_r = (x2, y2)
+                # # Print out the coords
+                # print("Top Left: ", top_l)
+                # print("Top Right: ", top_r)
+                # print("Bottom Left: ", bot_l)
+                # print("Bottom Right: ", bot_r)
+
+        msg_out = String()
+        msg_out.data = json.dumps({
+            "frame_id": self.frame_id,
+            "detections":detections
+            })
+        self.results.publish(msg_out)
+        
+        self.frame_id += 1
+        
+        # Debugging Show
+        cv2.imshow("YOLO Webcam", frame)
+        if cv2.waitKey(1) == 27:
+            self.get_logger().info("Shutting down")
+            rclpy.shutdown()
+
+        
+                
+    def destroy_node(self):
+        cv2.destroyAllWindows()
+        super().destroy_node()
+
+def main(args=None):
+    rclpy.init(args=args)
+
+    bbox = BBOX_Coords()
+    # bbox.detection_callback()
+
+    rclpy.spin(bbox)
+
+    bbox.destroy_node()
+    rclpy.shutdown()
+if __name__ == "__main__":
+    main() 
