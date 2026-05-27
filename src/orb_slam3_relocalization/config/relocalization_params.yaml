@@ -15,4 +15,4 @@ relocalization_node:
     visualize: true
     use_weighted_pnp: true # true = weighted PnP (landmark-aware), false = OpenCV solvePnPRansac
     landmark_weight: 1.0
-    background_weight: 0.7
+    background_weight: 0.0

@@ -132,6 +132,7 @@ namespace Relocalization
         int mFrameSkip;
         int mMinInliers;
         int mMinMatches;
+        int mHammingThreshold;
         float mBowThreshold;
         int mMaxCandidates;
         bool mVisualizationEnabled;
@@ -160,11 +161,8 @@ namespace Relocalization
                                const cv::Mat &descriptors,
                                ORB_SLAM3::KeyFrame *pKF,
                                std::vector<cv::Point3f> &points3D,
-                               std::vector<cv::Point2f> &points2D);
-        bool solvePnP(const std::vector<cv::Point3f> &points3D,
-                      const std::vector<cv::Point2f> &points2D,
-                      cv::Mat &rvec, cv::Mat &tvec,
-                      std::vector<int> &inliers);
+                               std::vector<cv::Point2f> &points2D,
+                               std::vector<float> &hammingDists);
         cv::Point3f computePosition(const cv::Mat &rvec, const cv::Mat &tvec);
         void exportMapToPCD(const std::string &outputPath);
 

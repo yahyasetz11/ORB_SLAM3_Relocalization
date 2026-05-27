@@ -55,6 +55,7 @@ Viewer.ViewpointF: 500.0
 
 Relocalization.BowSimilarityThreshold: 0.018
 Relocalization.MinInliers: 15
+Relocalization.HammingThreshold: 80
 
 # Visualization settings
 Visualization.ProcessWidth: 640

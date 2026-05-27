@@ -218,6 +218,7 @@ namespace Relocalization
         mFrameSkip = fs["Relocalization.FrameSkip"].empty() ? 5 : (int)fs["Relocalization.FrameSkip"];
         mMinInliers = fs["Relocalization.MinInliers"].empty() ? 1 : (int)fs["Relocalization.MinInliers"];
         mMinMatches = fs["Relocalization.MinMatches"].empty() ? 10 : (int)fs["Relocalization.MinMatches"];
+        mHammingThreshold = fs["Relocalization.HammingThreshold"].empty() ? 80 : (int)fs["Relocalization.HammingThreshold"];
         mBowThreshold = fs["Relocalization.BowSimilarityThreshold"].empty() ? 0.05f : (float)fs["Relocalization.BowSimilarityThreshold"];
         mMaxCandidates = fs["Relocalization.MaxCandidates"].empty() ? 5 : (int)fs["Relocalization.MaxCandidates"];
 
@@ -337,10 +338,12 @@ namespace Relocalization
         const cv::Mat &descriptors,
         ORB_SLAM3::KeyFrame *pKF,
         std::vector<cv::Point3f> &points3D,
-        std::vector<cv::Point2f> &points2D)
+        std::vector<cv::Point2f> &points2D,
+        std::vector<float> &hammingDists)
     {
         points3D.clear();
         points2D.clear();
+        hammingDists.clear();
 
         const std::vector<cv::KeyPoint> &vKFKeyPoints = pKF->mvKeysUn;
         const cv::Mat &KFDescriptors = pKF->mDescriptors;
@@ -370,6 +373,7 @@ namespace Relocalization
 
                     int queryIdx = knnMatches[i][0].queryIdx;
                     points2D.push_back(keypoints[queryIdx].pt);
+                    hammingDists.push_back((float)knnMatches[i][0].distance);
                 }
             }
         }
@@ -377,34 +381,6 @@ namespace Relocalization
         return points3D.size() >= (size_t)mMinMatches;
     }
 
-    bool RelocalizationModule::solvePnP(const std::vector<cv::Point3f> &points3D,
-                                        const std::vector<cv::Point2f> &points2D,
-                                        cv::Mat &rvec, cv::Mat &tvec,
-                                        std::vector<int> &inliers)
-    {
-        if (points3D.size() < (size_t)mMinMatches)
-            return false;
-
-        cv::Mat inliersMask;
-        bool success = cv::solvePnPRansac(points3D, points2D, mK, mDistCoef,
-                                          rvec, tvec, false, 300, 8.0, 0.9,
-                                          inliersMask, cv::SOLVEPNP_EPNP);
-
-        if (!success)
-            return false;
-
-        inliers.clear();
-        int numInliers = cv::countNonZero(inliersMask);
-        for (int i = 0; i < inliersMask.rows; i++)
-        {
-            if (inliersMask.at<uchar>(i))
-            {
-                inliers.push_back(i);
-            }
-        }
-
-        return numInliers >= mMinInliers;
-    }
 
     cv::Point3f RelocalizationModule::computePosition(const cv::Mat &rvec,
                                                       const cv::Mat &tvec)
@@ -491,8 +467,9 @@ namespace Relocalization
         {
             std::vector<cv::Point3f> points3D;
             std::vector<cv::Point2f> points2D;
+            std::vector<float> hammingDists;
 
-            if (matchWithKeyFrame(keypoints, descriptors, pKF, points3D, points2D))
+            if (matchWithKeyFrame(keypoints, descriptors, pKF, points3D, points2D, hammingDists))
             {
                 DBoW2::BowVector currentBowVec;
                 DBoW2::FeatureVector currentFeatVec;
@@ -505,45 +482,42 @@ namespace Relocalization
                 mpVocabulary->transform(vCurrentDesc, currentBowVec, currentFeatVec, 4);
                 float bowScore = mpVocabulary->score(currentBowVec, pKF->mBowVec);
 
-                cv::Mat rvec, tvec;
-                std::vector<int> inliers;
-
-                if (solvePnP(points3D, points2D, rvec, tvec, inliers))
+                // Hamming-distance filter: keep correspondences below threshold.
+                // Replaces RANSAC's geometric outlier rejection with descriptor-quality filtering.
+                std::vector<cv::Point3f> filtered3D;
+                std::vector<cv::Point2f> filtered2D;
+                std::vector<int> filteredIndices;
+                for (int i = 0; i < (int)points3D.size(); ++i)
                 {
-                    // Uniform LM refinement on RANSAC inliers.
-                    // Ensures the standard-PnP baseline uses RANSAC→LM,
-                    // matching the WeightedPnP pipeline so the only variable
-                    // between them is the weight vector.
-                    std::vector<cv::Point3f> lm_in3D;
-                    std::vector<cv::Point2f> lm_in2D;
-                    lm_in3D.reserve(inliers.size());
-                    lm_in2D.reserve(inliers.size());
-                    for (int idx : inliers)
+                    if (hammingDists[i] < mHammingThreshold)
                     {
-                        lm_in3D.push_back(points3D[idx]);
-                        lm_in2D.push_back(points2D[idx]);
+                        filtered3D.push_back(points3D[i]);
+                        filtered2D.push_back(points2D[i]);
+                        filteredIndices.push_back(i);
                     }
-                    std::vector<float> uniform_weights(lm_in3D.size(), 1.0f);
-                    WeightedPnPResult lm_refined = solvePnPWeighted(
-                        lm_in3D, lm_in2D, uniform_weights, rvec, tvec,
-                        50, 1e-6, 8.0f);
-                    if (lm_refined.success)
-                    {
-                        rvec = lm_refined.rvec;
-                        tvec = lm_refined.tvec;
-                        // Keep 'inliers' as RANSAC inliers so result.inlierIndices
-                        // gives node's WPnP the full RANSAC set as input.
-                    }
+                }
 
-                    float inlierRatio = (float)inliers.size() / points3D.size();
+                cv::Mat rvec, tvec;
+                std::vector<float> uniform_weights(filtered3D.size(), 1.0f);
+                // Cold EPnP warm-start (no RANSAC hint) → uniform-weight LM
+                WeightedPnPResult lm_result = solvePnPWeighted(
+                    filtered3D, filtered2D, uniform_weights,
+                    cv::Mat(), cv::Mat(), 50, 1e-6, 8.0f);
+
+                if (lm_result.success)
+                {
+                    rvec = lm_result.rvec;
+                    tvec = lm_result.tvec;
+
+                    float inlierRatio = (float)filteredIndices.size() / points3D.size();
                     float confidence = std::min(100.0f,
                                                 (inlierRatio * 100.0f) +
                                                     (bowScore * 1200.0f) +
-                                                    (std::min(50, (int)inliers.size()) * 0.8f));
+                                                    (std::min(50, (int)filteredIndices.size()) * 0.8f));
 
                     std::cout << "inlierRatio: " << inlierRatio << std::endl;
                     std::cout << "BoW score: " << bowScore << std::endl;
-                    std::cout << "inlierSize: " << (int)inliers.size() << std::endl;
+                    std::cout << "inlierSize: " << (int)filteredIndices.size() << std::endl;
 
                     if (confidence > bestScore)
                     {
@@ -552,7 +526,7 @@ namespace Relocalization
                         result.success = true;
                         result.position = computePosition(rvec, tvec);
                         result.matchedKeyFrameId = pKF->mnId;
-                        result.numInliers = inliers.size();
+                        result.numInliers = filteredIndices.size();
                         result.totalMatches = points3D.size();
                         result.confidence = confidence;
                         result.bowScore = bowScore;
@@ -560,7 +534,7 @@ namespace Relocalization
                         // Store match data for visualization
                         result.matched2DPoints = points2D;
                         result.matched3DPoints = points3D;
-                        result.inlierIndices = inliers;
+                        result.inlierIndices = filteredIndices;
 
                         result.rvec = rvec.clone();
                         result.tvec = tvec.clone();
