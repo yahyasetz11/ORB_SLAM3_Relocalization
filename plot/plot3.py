@@ -135,8 +135,8 @@ def process_pair(csv_path, gt_path, no_align, max_ts_diff, label):
     std_err  = translation_error(std_xyz_plot, gt_xyz)
     wpnp_err = translation_error(wpnp_xyz_plot[wpnp_ran], gt_xyz[wpnp_ran])
 
-    print(f"  Std PnP  — mean: {std_err.mean():.4f}m  median: {np.median(std_err):.4f}m")
-    print(f"  WPnP     — mean: {wpnp_err.mean():.4f}m  median: {np.median(wpnp_err):.4f}m")
+    print(f"  Std PnP  — RMSE: {np.sqrt((std_err**2).mean()):.4f}m  median: {np.median(std_err):.4f}m")
+    print(f"  WPnP     — RMSE: {np.sqrt((wpnp_err**2).mean()):.4f}m  median: {np.median(wpnp_err):.4f}m")
 
     timestamps_all  = csv_valid["timestamp"].to_numpy()
     timestamps_wpnp = timestamps_all[wpnp_ran]
@@ -197,9 +197,9 @@ def main():
     ax0.plot(
         ts_std, ref["std_err"],
         color=STD_COLOR, linewidth=1.2, alpha=0.85, linestyle="-",
-        label=f"Std PnP  mean={ref['std_err'].mean():.3f}m",
+        label=f"Std PnP  RMSE={np.sqrt((ref['std_err']**2).mean()):.3f}m",
     )
-    ax0.axhline(ref["std_err"].mean(), color=STD_COLOR, linestyle="--",
+    ax0.axhline(np.sqrt((ref["std_err"]**2).mean()), color=STD_COLOR, linestyle="--",
                 linewidth=0.8, alpha=0.35)
     ax0.set_title("Standard PnP (reference)", fontsize=10, loc="left", pad=4)
     ax0.set_ylabel("Translation error (m)")
@@ -216,9 +216,9 @@ def main():
             ax.plot(
                 ts_wpnp, r["wpnp_err"],
                 color=color, linewidth=1.2, alpha=0.85, linestyle="-",
-                label=f"WPnP  mean={r['wpnp_err'].mean():.3f}m",
+                label=f"WPnP  RMSE={np.sqrt((r['wpnp_err']**2).mean()):.3f}m",
             )
-            ax.axhline(r["wpnp_err"].mean(), color=color, linestyle="--",
+            ax.axhline(np.sqrt((r["wpnp_err"]**2).mean()), color=color, linestyle="--",
                        linewidth=0.8, alpha=0.35)
 
         ax.set_title(r["label"], fontsize=10, loc="left", pad=4)
