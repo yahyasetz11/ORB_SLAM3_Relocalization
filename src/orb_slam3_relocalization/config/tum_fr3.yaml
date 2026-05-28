@@ -55,7 +55,10 @@ Viewer.ViewpointF: 500.0
 
 Relocalization.BowSimilarityThreshold: 0.018
 Relocalization.MinInliers: 15
-Relocalization.HammingThreshold: 80
+Relocalization.HammingThreshold: 500
+Relocalization.HammingPreFilter: 100
+Relocalization.RansacIterations: 50
+Relocalization.RansacInlierThreshold3D: 0.10
 
 # Visualization settings
 Visualization.ProcessWidth: 640

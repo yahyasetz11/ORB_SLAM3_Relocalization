@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <iomanip>
 #include <limits>
+#include <random>
 #include <sophus/se3.hpp>
 
 #define M_PI 3.14159265358979323846
@@ -219,6 +220,9 @@ namespace Relocalization
         mMinInliers = fs["Relocalization.MinInliers"].empty() ? 1 : (int)fs["Relocalization.MinInliers"];
         mMinMatches = fs["Relocalization.MinMatches"].empty() ? 10 : (int)fs["Relocalization.MinMatches"];
         mHammingThreshold = fs["Relocalization.HammingThreshold"].empty() ? 80 : (int)fs["Relocalization.HammingThreshold"];
+        mHammingPreFilterThreshold = fs["Relocalization.HammingPreFilter"].empty() ? 100 : (int)fs["Relocalization.HammingPreFilter"];
+        mRansacInlierThreshold3D = fs["Relocalization.RansacInlierThreshold3D"].empty() ? 0.10f : (float)fs["Relocalization.RansacInlierThreshold3D"];
+        mRansacIterations = fs["Relocalization.RansacIterations"].empty() ? 50 : (int)fs["Relocalization.RansacIterations"];
         mBowThreshold = fs["Relocalization.BowSimilarityThreshold"].empty() ? 0.05f : (float)fs["Relocalization.BowSimilarityThreshold"];
         mMaxCandidates = fs["Relocalization.MaxCandidates"].empty() ? 5 : (int)fs["Relocalization.MaxCandidates"];
 
@@ -381,7 +385,6 @@ namespace Relocalization
         return points3D.size() >= (size_t)mMinMatches;
     }
 
-
     cv::Point3f RelocalizationModule::computePosition(const cv::Mat &rvec,
                                                       const cv::Mat &tvec)
     {
@@ -462,7 +465,7 @@ namespace Relocalization
 
         auto candidates = detectRelocalizationCandidates(descriptors);
 
-        float bestScore = 0.0f;
+        float bestRankScore = -1.0f;
         for (auto pKF : candidates)
         {
             std::vector<cv::Point3f> points3D;
@@ -476,68 +479,178 @@ namespace Relocalization
                 std::vector<cv::Mat> vCurrentDesc;
                 vCurrentDesc.reserve(descriptors.rows);
                 for (int i = 0; i < descriptors.rows; ++i)
-                {
                     vCurrentDesc.push_back(descriptors.row(i).clone());
-                }
                 mpVocabulary->transform(vCurrentDesc, currentBowVec, currentFeatVec, 4);
                 float bowScore = mpVocabulary->score(currentBowVec, pKF->mBowVec);
 
-                // Hamming-distance filter: keep correspondences below threshold.
-                // Replaces RANSAC's geometric outlier rejection with descriptor-quality filtering.
-                std::vector<cv::Point3f> filtered3D;
-                std::vector<cv::Point2f> filtered2D;
-                std::vector<int> filteredIndices;
+                // Stage 1: loose Hamming pre-filter — remove obviously bad matches
+                std::vector<cv::Point3f> preFiltered3D;
+                std::vector<cv::Point2f> preFiltered2D;
+                std::vector<int> preFilteredIndices;
                 for (int i = 0; i < (int)points3D.size(); ++i)
                 {
-                    if (hammingDists[i] < mHammingThreshold)
+                    if (hammingDists[i] < mHammingPreFilterThreshold)
                     {
-                        filtered3D.push_back(points3D[i]);
-                        filtered2D.push_back(points2D[i]);
-                        filteredIndices.push_back(i);
+                        preFiltered3D.push_back(points3D[i]);
+                        preFiltered2D.push_back(points2D[i]);
+                        preFilteredIndices.push_back(i);
+                    }
+                }
+                if ((int)preFiltered3D.size() < 4)
+                    continue;
+
+                // Stage 2: RANSAC — sample 4 points, solve PnP, score via 3D distance
+                const int N = (int)preFiltered3D.size();
+                double fx = (double)mK.at<float>(0, 0);
+                double fy = (double)mK.at<float>(1, 1);
+                double cx_k = (double)mK.at<float>(0, 2);
+                double cy_k = (double)mK.at<float>(1, 2);
+
+                std::vector<int> bestInlierLocalIndices;
+                cv::Mat bestRvec, bestTvec;
+
+                std::mt19937 rng(std::random_device{}());
+                std::uniform_int_distribution<int> randIdx(0, N - 1);
+
+                for (int iter = 0; iter < mRansacIterations; ++iter)
+                {
+                    // Sample 4 unique correspondences
+                    std::vector<int> sample;
+                    sample.reserve(4);
+                    while ((int)sample.size() < 4)
+                    {
+                        int idx = randIdx(rng);
+                        if (std::find(sample.begin(), sample.end(), idx) == sample.end())
+                            sample.push_back(idx);
+                    }
+
+                    std::vector<cv::Point3f> s3D;
+                    std::vector<cv::Point2f> s2D;
+                    for (int idx : sample)
+                    {
+                        s3D.push_back(preFiltered3D[idx]);
+                        s2D.push_back(preFiltered2D[idx]);
+                    }
+
+                    cv::Mat rvec_s, tvec_s;
+                    if (!cv::solvePnP(s3D, s2D, mK, mDistCoef, rvec_s, tvec_s, false, cv::SOLVEPNP_P3P))
+                        continue;
+
+                    cv::Mat R_s;
+                    cv::Rodrigues(rvec_s, R_s);
+                    R_s.convertTo(R_s, CV_64F);
+                    cv::Mat t_s;
+                    tvec_s.convertTo(t_s, CV_64F);
+
+                    // Score all pre-filtered matches using 3D distance in camera space:
+                    // X_c = R*X_w + t; X_c' = Zc*[(u-cx)/fx, (v-cy)/fy, 1]; dist = ||X_c - X_c'||
+                    std::vector<int> iterInliers;
+                    for (int i = 0; i < N; ++i)
+                    {
+                        double Xw = preFiltered3D[i].x, Yw = preFiltered3D[i].y, Zw = preFiltered3D[i].z;
+                        double Xc = R_s.at<double>(0,0)*Xw + R_s.at<double>(0,1)*Yw + R_s.at<double>(0,2)*Zw + t_s.at<double>(0);
+                        double Yc = R_s.at<double>(1,0)*Xw + R_s.at<double>(1,1)*Yw + R_s.at<double>(1,2)*Zw + t_s.at<double>(1);
+                        double Zc = R_s.at<double>(2,0)*Xw + R_s.at<double>(2,1)*Yw + R_s.at<double>(2,2)*Zw + t_s.at<double>(2);
+                        if (Zc <= 0) continue;
+
+                        double Xc_obs = Zc * (preFiltered2D[i].x - cx_k) / fx;
+                        double Yc_obs = Zc * (preFiltered2D[i].y - cy_k) / fy;
+                        double dist3d = std::sqrt((Xc - Xc_obs)*(Xc - Xc_obs) + (Yc - Yc_obs)*(Yc - Yc_obs));
+
+                        if (dist3d < (double)mRansacInlierThreshold3D)
+                            iterInliers.push_back(i);
+                    }
+
+                    if ((int)iterInliers.size() > (int)bestInlierLocalIndices.size())
+                    {
+                        bestInlierLocalIndices = iterInliers;
+                        bestRvec = rvec_s.clone();
+                        bestTvec = tvec_s.clone();
                     }
                 }
 
-                cv::Mat rvec, tvec;
-                std::vector<float> uniform_weights(filtered3D.size(), 1.0f);
-                // Cold EPnP warm-start (no RANSAC hint) → uniform-weight LM
-                WeightedPnPResult lm_result = solvePnPWeighted(
-                    filtered3D, filtered2D, uniform_weights,
-                    cv::Mat(), cv::Mat(), 50, 1e-6, 8.0f);
+                if ((int)bestInlierLocalIndices.size() < 4)
+                    continue;
 
-                if (lm_result.success)
+                // Stage 3: LM refinement on all RANSAC inliers (uniform weights)
+                std::vector<cv::Point3f> inlier3D;
+                std::vector<cv::Point2f> inlier2D;
+                std::vector<int> inlierOriginalIndices;
+                for (int localIdx : bestInlierLocalIndices)
                 {
-                    rvec = lm_result.rvec;
-                    tvec = lm_result.tvec;
+                    inlier3D.push_back(preFiltered3D[localIdx]);
+                    inlier2D.push_back(preFiltered2D[localIdx]);
+                    inlierOriginalIndices.push_back(preFilteredIndices[localIdx]);
+                }
 
-                    float inlierRatio = (float)filteredIndices.size() / points3D.size();
-                    float confidence = std::min(100.0f,
-                                                (inlierRatio * 100.0f) +
-                                                    (bowScore * 1200.0f) +
-                                                    (std::min(50, (int)filteredIndices.size()) * 0.8f));
+                // LM pass 1: refine on all RANSAC inliers
+                std::vector<float> uniform_weights(inlier3D.size(), 1.0f);
+                WeightedPnPResult lm1 = solvePnPWeighted(
+                    inlier3D, inlier2D, uniform_weights,
+                    bestRvec, bestTvec, 50, 1e-6, 8.0f);
 
+                if (!lm1.success)
+                    continue;
+
+                // LM pass 2: re-run on the strict 8px inlier subset from pass 1
+                std::vector<cv::Point3f> strict3D;
+                std::vector<cv::Point2f> strict2D;
+                std::vector<int> strictOriginalIndices;
+                for (int lmIdx : lm1.inlierIndices)
+                {
+                    strict3D.push_back(inlier3D[lmIdx]);
+                    strict2D.push_back(inlier2D[lmIdx]);
+                    strictOriginalIndices.push_back(inlierOriginalIndices[lmIdx]);
+                }
+
+                if ((int)strict3D.size() < 4)
+                    continue;
+
+                std::vector<float> strict_weights(strict3D.size(), 1.0f);
+                WeightedPnPResult lm2 = solvePnPWeighted(
+                    strict3D, strict2D, strict_weights,
+                    lm1.rvec, lm1.tvec, 50, 1e-6, 8.0f);
+
+                if (!lm2.success)
+                    continue;
+
+                {
+                    float reproj = std::max(lm2.meanReprojectionError, 0.01f);
+                    float rankScore = (float)lm2.numInliers / reproj;
+
+                    float inlierRatio = (float)lm2.numInliers / points3D.size();
+
+                    std::cout << "[ORB] descriptor size: " << descriptors.rows << " x " << descriptors.cols << std::endl;
                     std::cout << "inlierRatio: " << inlierRatio << std::endl;
                     std::cout << "BoW score: " << bowScore << std::endl;
-                    std::cout << "inlierSize: " << (int)filteredIndices.size() << std::endl;
+                    std::cout << "inlierSize: " << lm2.numInliers << std::endl;
+                    std::cout << "reproj_error: " << lm2.meanReprojectionError << std::endl;
+                    std::cout << "rankScore: " << rankScore << std::endl;
 
-                    if (confidence > bestScore)
+                    if (rankScore > bestRankScore)
                     {
-                        bestScore = confidence;
+                        bestRankScore = rankScore;
+
+                        // Map lm2 inlier indices (local to strict3D) back to original points3D indices
+                        std::vector<int> finalInlierOriginalIndices;
+                        finalInlierOriginalIndices.reserve(lm2.inlierIndices.size());
+                        for (int idx : lm2.inlierIndices)
+                            finalInlierOriginalIndices.push_back(strictOriginalIndices[idx]);
 
                         result.success = true;
-                        result.position = computePosition(rvec, tvec);
+                        result.position = computePosition(lm2.rvec, lm2.tvec);
                         result.matchedKeyFrameId = pKF->mnId;
-                        result.numInliers = filteredIndices.size();
+                        result.numInliers = lm2.numInliers;
                         result.totalMatches = points3D.size();
-                        result.confidence = confidence;
+                        result.confidence = inlierRatio * 100.0f;
                         result.bowScore = bowScore;
 
-                        // Store match data for visualization
                         result.matched2DPoints = points2D;
                         result.matched3DPoints = points3D;
-                        result.inlierIndices = filteredIndices;
+                        result.inlierIndices = finalInlierOriginalIndices;
 
-                        result.rvec = rvec.clone();
-                        result.tvec = tvec.clone();
+                        result.rvec = lm2.rvec.clone();
+                        result.tvec = lm2.tvec.clone();
 
                         mCurrentPosition = result.position;
                     }

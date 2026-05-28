@@ -154,6 +154,9 @@ namespace Relocalization
         int mMinInliers;
         int mMinMatches;
         int mHammingThreshold;
+        int mHammingPreFilterThreshold;
+        float mRansacInlierThreshold3D;
+        int mRansacIterations;
         float mBowThreshold;
         int mMaxCandidates;
         bool mVisualizationEnabled;
