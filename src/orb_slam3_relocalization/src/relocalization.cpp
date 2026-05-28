@@ -1228,6 +1228,59 @@ namespace Relocalization
         return weights;
     }
 
+    // ── Hamming-distance filter via BFMatcher ────────────────────────────────────
+    void RelocalizationModule::filterByHammingDistance(
+        const std::vector<cv::Point3f> &points3D,
+        const std::vector<cv::Point2f> &points2D,
+        const cv::Mat &queryDescriptors,
+        const cv::Mat &trainDescriptors,
+        std::vector<cv::Point3f> &filtered3D,
+        std::vector<cv::Point2f> &filtered2D,
+        std::vector<int> &filteredIndices,
+        int threshold)
+    {
+        int thr = (threshold < 0) ? mHammingThreshold : threshold;
+        filtered3D.clear();
+        filtered2D.clear();
+        filteredIndices.clear();
+
+        // crossCheck=true: only keep mutually best matches between the paired descriptors
+        cv::BFMatcher matcher(cv::NORM_HAMMING, true);
+        std::vector<cv::DMatch> matches;
+        matcher.match(queryDescriptors, trainDescriptors, matches);
+
+        for (const auto &m : matches)
+        {
+            if (m.distance < thr)
+            {
+                int i = m.queryIdx;
+                filtered3D.push_back(points3D[i]);
+                filtered2D.push_back(points2D[i]);
+                filteredIndices.push_back(i);
+            }
+        }
+    }
+
+    // ── Standard PnP wrapper ─────────────────────────────────────────────────────
+    bool RelocalizationModule::solvePnP(
+        const std::vector<cv::Point3f> &points3D,
+        const std::vector<cv::Point2f> &points2D,
+        const cv::Mat &queryDescriptors,
+        const cv::Mat &trainDescriptors,
+        cv::Mat &rvec, cv::Mat &tvec,
+        int method)
+    {
+        std::vector<cv::Point3f> filtered3D;
+        std::vector<cv::Point2f> filtered2D;
+        std::vector<int> filteredIndices;
+        filterByHammingDistance(points3D, points2D, queryDescriptors, trainDescriptors,
+                                filtered3D, filtered2D, filteredIndices);
+        if (filtered3D.size() < 4)
+            return false;
+        return cv::solvePnP(filtered3D, filtered2D, mK, mDistCoef,
+                            rvec, tvec, false, method);
+    }
+
     // ── Weighted PnP via Gauss-Newton / Levenberg-Marquardt ──────────────────────
     WeightedPnPResult RelocalizationModule::solvePnPWeighted(
         const std::vector<cv::Point3f> &points3D,

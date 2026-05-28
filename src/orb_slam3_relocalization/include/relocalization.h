@@ -83,6 +83,27 @@ namespace Relocalization
         cv::Mat createMapVisualization(const LocationResult &result, cv::Size targetSize);
         cv::Point2f project3DTo2D(const cv::Point3f &pt3D, int mapHeight);
 
+        // Hamming-distance filter via BFMatcher (descriptor-quality outlier rejection, replaces RANSAC)
+        // queryDescriptors / trainDescriptors: one row per matched pair, aligned with points3D/2D
+        void filterByHammingDistance(
+            const std::vector<cv::Point3f> &points3D,
+            const std::vector<cv::Point2f> &points2D,
+            const cv::Mat &queryDescriptors,
+            const cv::Mat &trainDescriptors,
+            std::vector<cv::Point3f> &filtered3D,
+            std::vector<cv::Point2f> &filtered2D,
+            std::vector<int> &filteredIndices,
+            int threshold = -1);
+
+        // Standard PnP wrapper (OpenCV cv::solvePnP) — filters by Hamming distance first
+        bool solvePnP(
+            const std::vector<cv::Point3f> &points3D,
+            const std::vector<cv::Point2f> &points2D,
+            const cv::Mat &queryDescriptors,
+            const cv::Mat &trainDescriptors,
+            cv::Mat &rvec, cv::Mat &tvec,
+            int method = cv::SOLVEPNP_ITERATIVE);
+
         // Weighted PnP (Gauss-Newton / Levenberg-Marquardt)
         WeightedPnPResult solvePnPWeighted(
             const std::vector<cv::Point3f> &points3D,
