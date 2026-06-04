@@ -75,7 +75,7 @@ The custom pipeline is compared against ORB-SLAM3's native relocalization proced
 | Semantic Weighting | ✗ | ✓ (door=1.0, other=0.7, background=0.3) |
 
 📊 [**View Pipeline Benchmark Results**]
-![Pipeline Benchmark](media/benchmark_plot_3_cropped.png)
+![Pipeline Benchmark](media/benchmark_plot_3_new_cropped.png)
 
 ---
 
@@ -83,9 +83,9 @@ The custom pipeline is compared against ORB-SLAM3's native relocalization proced
 
 Within the custom pipeline, the semantic-weighted PnP is compared directly against the standard unweighted PnP across different weight configurations, evaluated on TUM RGB-D sequences with ground-truth camera trajectories.
 
-![Pose Estimation Benchmark](media/error_groundtruth_dynamic_v5.png)
+![Pose Estimation Benchmark](media/error_groundtruth_dynamic_v7.png)
 
-*Translational and rotational error vs. ground-truth poses. Weight configurations: standard (uniform), door=1.0/bg=0.3, door=1.0/bg=0.5, door=1.0/bg=0.7.*
+*Translational and rotational error vs. ground-truth poses. Weight configurations: standard (uniform), door=1.0/bg=1.0, door=1.0/bg=0.7, door=1.0/bg=0.3, door=1.0/bg=0.0.*
 
 ---
 
