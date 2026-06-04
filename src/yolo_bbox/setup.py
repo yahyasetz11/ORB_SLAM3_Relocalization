@@ -32,6 +32,7 @@ setup(
             'yolo_bbox_video = yolo_bbox.yolo_bbox_video:main',
             'yolo_bbox_webcam = yolo_bbox.yolo_bbox_webcam:main',
             'yolo_bbox_receiver = yolo_bbox.yolo_bbox_receiver:main',
+            'yolo_seg_video = yolo_bbox.yolo_seg_video:main',
         ],
     },
 )
