@@ -70,7 +70,7 @@ class SegCoords(Node):
 
         # Model
         pkg_dir = os.path.dirname(os.path.realpath(__file__))
-        self.model_path = os.path.join(pkg_dir, 'model', 'model.pt')
+        self.model_path = os.path.join(pkg_dir, 'model', 'segv11_conf40.pt')
         self.model = YOLO(self.model_path)
 
         self.bridge = CvBridge()

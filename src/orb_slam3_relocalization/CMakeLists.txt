@@ -82,11 +82,17 @@ add_executable(relocalization_node src/relocalization_node.cpp src/relocalizatio
 target_link_libraries(relocalization_node ${LIBS} nlohmann_json::nlohmann_json)
 ament_target_dependencies(relocalization_node rclcpp geometry_msgs std_msgs sensor_msgs cv_bridge)
 
+# ── ROS2 node: relocalization_seg_node ───────────────────────────────────────
+add_executable(relocalization_seg_node src/relocalization_seg_node.cpp src/relocalization.cpp)
+target_link_libraries(relocalization_seg_node ${LIBS})
+ament_target_dependencies(relocalization_seg_node rclcpp geometry_msgs sensor_msgs cv_bridge)
+
 # ── Install ROS2 targets ──────────────────────────────────────────────────────
 install(TARGETS
     map_creator_node
     localization_test_node
     relocalization_node
+    relocalization_seg_node
     DESTINATION lib/${PROJECT_NAME}
 )
 

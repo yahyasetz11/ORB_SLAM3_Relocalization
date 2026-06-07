@@ -1,0 +1,19 @@
+camera_node:
+  ros__parameters:
+    video_path: "~/Documents/ORB_SLAM3_Relocalization/data/dataset1.mp4"
+    camera_id: 0 # used when video_path is empty (webcam mode)
+
+yolo_seg_node:
+  ros__parameters:
+    device: "cuda"
+    display: false
+    conf: 0.2
+
+relocalization_seg_node:
+  ros__parameters:
+    vocab_path: "~/Documents/ORB_SLAM3/Vocabulary/ORBvoc.txt"
+    config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/webcam_complete.yaml"
+    visualize: true
+    use_weighted_pnp: true
+    landmark_weight: 1.0
+    background_weight: 0.3
