@@ -11,6 +11,7 @@ docs/superpowers/
 CLAUDE.md
 csv/
 *.csv
+docs/updates/
 
 # OSA map files are too large for git — keep the folder, ignore the files
 src/navigation/tools/osa_files/*.osa
