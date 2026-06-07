@@ -17,3 +17,4 @@ relocalization_seg_node:
     use_weighted_pnp: true
     landmark_weight: 1.0
     background_weight: 0.3
+    dynamic_bg_weight: false # true = bg_weight computed as min(bg_inliers/landmark_inliers, 1.0) per frame

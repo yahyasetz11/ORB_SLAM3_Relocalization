@@ -83,6 +83,7 @@ public:
         declare_parameter("use_weighted_pnp", false);
         declare_parameter("landmark_weight", 1.0f);
         declare_parameter("background_weight", 0.3f);
+        declare_parameter("dynamic_bg_weight", false);
 
         vocab_path_ = expandPath(get_parameter("vocab_path").as_string());
         config_path_ = expandPath(get_parameter("config_path").as_string());
@@ -90,6 +91,7 @@ public:
         use_weighted_pnp_ = get_parameter("use_weighted_pnp").as_bool();
         landmark_weight_ = get_parameter("landmark_weight").as_double();
         background_weight_ = get_parameter("background_weight").as_double();
+        dynamic_bg_weight_ = get_parameter("dynamic_bg_weight").as_bool();
 
         if (vocab_path_.empty() || config_path_.empty())
         {
@@ -109,6 +111,7 @@ public:
         RCLCPP_INFO(get_logger(), "PnP mode        : %s", use_weighted_pnp_ ? "weighted" : "standard (OpenCV)");
         RCLCPP_INFO(get_logger(), "Landmark weight : %.2f", landmark_weight_);
         RCLCPP_INFO(get_logger(), "Background weight : %.2f", background_weight_);
+        RCLCPP_INFO(get_logger(), "Dynamic bg weight : %s", dynamic_bg_weight_ ? "yes" : "no");
 
         pose_pub_ = create_publisher<geometry_msgs::msg::Pose>("/relocalization/pose", 10);
 
@@ -132,7 +135,7 @@ public:
                      << "wpnp_weighted_cost,pose_delta_m,wpnp_iterations,"
                      << "is_localized,result_tx,result_ty,result_tz,"
                      << "result_qx,result_qy,result_qz,result_qw,"
-                     << "std_reproj_inliers_only\n";
+                     << "std_reproj_inliers_only,bg_weight_used\n";
             RCLCPP_INFO(get_logger(), "CSV log: comparison_log.csv");
         }
 
@@ -230,6 +233,7 @@ public:
             cv::Mat std_rvec = result.rvec.clone();
             cv::Mat std_tvec = result.tvec.clone();
 
+            float effective_bg_weight = static_cast<float>(background_weight_);
             Relocalization::WeightedPnPResult wpnp;
             wpnp.success = false;
             wpnp.position = {0.0f, 0.0f, 0.0f};
@@ -253,15 +257,39 @@ public:
                 }
 
                 // ── Tuning point ─────────────────────────────────────────────
-                // Both weights are intentionally equal (1.0) so the baseline
-                // comparison uses uniform LM. To enable semantic weighting, set
-                // background_weight < landmark_weight (e.g. 0.3 / 1.0).
+                // Static mode: background_weight param used directly.
+                // Dynamic mode: bg_weight = min(bg_inliers/landmark_inliers, 1.0),
+                //   falling back to 1.0 if no landmark inliers found.
                 // Per-class fine-tuning: edit getSemanticWeight() in relocalization.cpp
                 const float landmark_weight = static_cast<float>(landmark_weight_);
-                const float background_weight = static_cast<float>(background_weight_);
+                if (dynamic_bg_weight_)
+                {
+                    int lm_count = 0, bg_count = 0;
+                    for (const auto &pt : inlier2D)
+                    {
+                        bool is_lm = false;
+                        for (const auto &region : result.landmarkRegions)
+                        {
+                            for (const auto &kp : region.keypoints)
+                            {
+                                if (std::abs(kp.pt.x - pt.x) < 0.5f &&
+                                    std::abs(kp.pt.y - pt.y) < 0.5f)
+                                {
+                                    is_lm = true;
+                                    break;
+                                }
+                            }
+                            if (is_lm) break;
+                        }
+                        if (is_lm) ++lm_count; else ++bg_count;
+                    }
+                    effective_bg_weight = (lm_count > 0)
+                        ? std::min((float)bg_count / lm_count, 1.0f)
+                        : 1.0f;
+                }
                 std::vector<float> weights = reloc_->assignWeightsFromLandmarks(
                     inlier2D, result.landmarkRegions,
-                    landmark_weight, background_weight);
+                    landmark_weight, effective_bg_weight);
 
                 wpnp = reloc_->solvePnPWeighted(
                     inlier3D, inlier2D, weights,
@@ -278,11 +306,11 @@ public:
                     RCLCPP_INFO(get_logger(),
                                 "[WeightedPnP] inliers=%d/%d  reproj=%.3fpx  "
                                 "[StandardPnP] inliers=%d/%d  "
-                                "pose_delta=%.4fm  wpnp_iters=%d",
+                                "pose_delta=%.4fm  wpnp_iters=%d  bg_w=%.3f",
                                 wpnp.numInliers, wpnp.totalCorrespondences,
                                 wpnp.meanReprojectionError,
                                 result.numInliers, result.totalMatches,
-                                pose_delta, wpnp.iterations);
+                                pose_delta, wpnp.iterations, effective_bg_weight);
 
                     if (use_weighted_pnp_)
                     {
@@ -364,6 +392,7 @@ public:
                          << "," << result_tx << "," << result_ty << "," << result_tz
                          << "," << result_qx << "," << result_qy << "," << result_qz << "," << result_qw
                          << "," << std_reproj_inliers_only
+                         << "," << std::setprecision(4) << effective_bg_weight
                          << "\n";
                 csv_log_.flush();
             }
@@ -638,6 +667,7 @@ private:
     std::string config_path_;
     bool visualize_;
     bool use_weighted_pnp_;
+    bool dynamic_bg_weight_;
     bool ready_;
     float landmark_weight_;
     float background_weight_;
