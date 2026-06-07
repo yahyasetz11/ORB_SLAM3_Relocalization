@@ -142,6 +142,23 @@ def match_timestamps(query_ts: np.ndarray, gt_ts: np.ndarray,
 
 
 # ── Metrics ──────────────────────────────────────────────────────────────────
+def get_gap_bands(timestamps, t0, min_gap=1.0):
+    """Return (start, end) relative-time pairs where consecutive timestamp gaps > min_gap."""
+    bands = []
+    for i in range(len(timestamps) - 1):
+        gap = timestamps[i + 1] - timestamps[i]
+        if gap > min_gap:
+            bands.append((timestamps[i] - t0, timestamps[i + 1] - t0))
+    return bands
+
+
+def shade_gaps(ax, bands, label="No pose (>1s)"):
+    """Draw grey axvspan bands for each gap; legend label on first band only."""
+    for i, (start, end) in enumerate(bands):
+        ax.axvspan(start, end, color="#808080", alpha=0.15, zorder=0,
+                   label=label if i == 0 else None)
+
+
 def compute_ate(est_xyz: np.ndarray, gt_xyz: np.ndarray):
     """Per-frame translation residual + RMSE/mean/median."""
     err = np.linalg.norm(est_xyz - gt_xyz, axis=1)
@@ -379,6 +396,7 @@ def main():
             color="#2196F3", lw=1, label=f"Our Pipeline (RMSE {ours_run['ate']['rmse']:.3f}m)")
     ax.plot(orb_run["ts"] - orb_run["ts"][0], orb_run["ate_per_frame"],
             color="#F44336", lw=1, label=f"ORB-SLAM3 Loc (RMSE {orb_run['ate']['rmse']:.3f}m)")
+    shade_gaps(ax, get_gap_bands(ours_run["ts"], ours_run["ts"][0]))
     ax.set_xlabel("Time (s)"); ax.set_ylabel("ATE (m)")
     ax.set_title("Absolute Trajectory Error over time")
     ax.legend(fontsize=8); ax.grid(alpha=0.3)

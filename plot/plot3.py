@@ -80,6 +80,41 @@ def translation_error(est, ref):
     return np.linalg.norm(est - ref, axis=1)
 
 
+def get_gap_bands(timestamps, t0, min_gap=1.0):
+    """Return (start, end) relative-time pairs where consecutive timestamp gaps > min_gap."""
+    bands = []
+    for i in range(len(timestamps) - 1):
+        gap = timestamps[i + 1] - timestamps[i]
+        if gap > min_gap:
+            bands.append((timestamps[i] - t0, timestamps[i + 1] - t0))
+    return bands
+
+
+def shade_gaps(ax, bands, label="No pose (>1s)", exclude=None):
+    """Draw grey axvspan bands for each gap; legend label on first band only.
+    exclude: list of (start, end) relative-time ranges to suppress shading."""
+    exclude = exclude or []
+    labeled = False
+    for start, end in bands:
+        # Clip each band against all exclusion zones, potentially splitting it
+        segments = [(start, end)]
+        for ex_s, ex_e in exclude:
+            clipped = []
+            for s, e in segments:
+                if e <= ex_s or s >= ex_e:
+                    clipped.append((s, e))        # no overlap — keep as-is
+                else:
+                    if s < ex_s:
+                        clipped.append((s, ex_s)) # left remainder
+                    if e > ex_e:
+                        clipped.append((ex_e, e)) # right remainder
+            segments = clipped
+        for s, e in segments:
+            ax.axvspan(s, e, color="#808080", alpha=0.15, zorder=0,
+                       label=label if not labeled else None)
+            labeled = True
+
+
 def process_pair(csv_path, gt_path, no_align, max_ts_diff, label):
     try:
         csv = pd.read_csv(csv_path)
@@ -201,6 +236,7 @@ def main():
     )
     ax0.axhline(np.sqrt((ref["std_err"]**2).mean()), color=STD_COLOR, linestyle="--",
                 linewidth=0.8, alpha=0.35)
+    shade_gaps(ax0, get_gap_bands(ref["timestamps_std"], t0), exclude=[(56, 64)])
     ax0.set_title("Standard PnP (reference)", fontsize=10, loc="left", pad=4)
     ax0.set_ylabel("Translation error (m)")
     ax0.legend(loc="upper right", fontsize=9)
@@ -221,6 +257,7 @@ def main():
             ax.axhline(np.sqrt((r["wpnp_err"]**2).mean()), color=color, linestyle="--",
                        linewidth=0.8, alpha=0.35)
 
+        shade_gaps(ax, get_gap_bands(r["timestamps_std"], t0), exclude=[(56, 64)])
         ax.set_title(r["label"], fontsize=10, loc="left", pad=4)
         ax.set_ylabel("Translation error (m)")
         ax.legend(loc="upper right", fontsize=9)
