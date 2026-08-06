@@ -12,7 +12,7 @@ relocalization_node:
     vocab_path: "~/Documents/ORB_SLAM3/Vocabulary/ORBvoc.txt"
     config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/tum_fr3.yaml"
     # config_path: "~/Documents/ORB_SLAM3_Relocalization/src/orb_slam3_relocalization/config/webcam_complete.yaml"
-    visualize: false
+    visualize: true
     use_weighted_pnp: true # true = weighted PnP (landmark-aware), false = OpenCV solvePnPRansac
     landmark_weight: 1.0
     background_weight: 0.3

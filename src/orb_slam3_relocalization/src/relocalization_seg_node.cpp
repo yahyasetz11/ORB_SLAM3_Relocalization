@@ -70,8 +70,8 @@ static void rvecToQuaternion(const cv::Mat &rvec,
 }
 
 // Matches CLASSES in yolo_seg_video.py: {0:door, 1:fire_hydrant, 2:metal_door, 3:pillar, 4:window}
-static const std::array<std::string, 5> SEG_CLASS_NAMES = {
-    "door", "fire_hydrant", "metal_door", "pillar", "window"};
+static const std::array<std::string, 9> SEG_CLASS_NAMES = {
+    "door", "fire_hydrant", "metal_door", "pillar", "window", "keyboard", "monitor", "teddy_bear", "globe"};
 
 class RelocalizationSegNode : public rclcpp::Node
 {
@@ -146,7 +146,7 @@ public:
             std::bind(&RelocalizationSegNode::imageCallback, this, std::placeholders::_1));
         RCLCPP_INFO(get_logger(), "Subscribed to /camera/image_raw");
 
-        for (int cls_id = 0; cls_id < 5; cls_id++)
+        for (int cls_id = 0; cls_id < 9; cls_id++)
         {
             std::string topic = "/seg/" + SEG_CLASS_NAMES[cls_id];
             auto sub = create_subscription<sensor_msgs::msg::Image>(

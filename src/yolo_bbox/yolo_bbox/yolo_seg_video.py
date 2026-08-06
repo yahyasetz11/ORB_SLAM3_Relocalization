@@ -22,6 +22,10 @@ CLASSES = {
     2: 'metal_door',
     3: 'pillar',
     4: 'window',
+    5: 'keyboard',
+    6: 'monitor',
+    7: 'teddy_bear',
+    8: 'globe',
 }
 
 
@@ -70,7 +74,8 @@ class SegCoords(Node):
 
         # Model
         pkg_dir = os.path.dirname(os.path.realpath(__file__))
-        self.model_path = os.path.join(pkg_dir, 'model', 'segv11_conf40.pt')
+        # self.model_path = os.path.join(pkg_dir, 'model', 'segv11_conf40.pt')
+        self.model_path = os.path.join(pkg_dir, 'model', 'best.pt')
         self.model = YOLO(self.model_path)
 
         self.bridge = CvBridge()

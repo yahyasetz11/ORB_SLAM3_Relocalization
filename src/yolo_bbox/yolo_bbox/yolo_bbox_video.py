@@ -60,8 +60,10 @@ class BBOX_Coords(Node):
 
         # Model
         pkg_dir = os.path.dirname(os.path.realpath(__file__))
-        self.model_path = os.path.join(pkg_dir, 'model', 'tum_fr3.pt')
+        self.model_path = os.path.join(pkg_dir, 'model', 'tum_fr3.pt')    
+        # self.model_path = os.path.join(pkg_dir, 'model', 'best.pt')
         # self.model_path = os.path.join(pkg_dir, 'model', 'model1.pt')
+        # self.model_path = os.path.join(pkg_dir, 'model', 'segv11_conf40.pt')
         self.model = YOLO(self.model_path)
 
         # Publishers
